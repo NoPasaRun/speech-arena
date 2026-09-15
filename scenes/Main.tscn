@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://dxpeom20s5xy6"]
 
 [ext_resource type="Script" uid="uid://00qicrvhwqsp" path="res://scripts/LobbyUI.gd" id="1"]
+[ext_resource type="Script" uid="uid://cabr863mvlvw3" path="res://scripts/Main.gd" id="1_rvslj"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_floor"]
 size = Vector3(40, 1, 40)
@@ -9,6 +10,7 @@ size = Vector3(40, 1, 40)
 size = Vector3(40, 1, 40)
 
 [node name="Main" type="Node3D" unique_id=949152360]
+script = ExtResource("1_rvslj")
 
 [node name="Floor" type="StaticBody3D" parent="." unique_id=750039163]
 
@@ -22,6 +24,9 @@ shape = SubResource("BoxShape3D_floor")
 transform = Transform3D(0.866, -0.433, 0.25, 0, 0.5, 0.866, -0.5, -0.75, 0.433, 0, 10, 0)
 
 [node name="Players" type="Node3D" parent="." unique_id=1936547460]
+
+[node name="PlayerSpawner" type="MultiplayerSpawner" parent="Players" unique_id=187415394]
+spawn_path = NodePath("..")
 
 [node name="UI" type="CanvasLayer" parent="." unique_id=1851433974]
 script = ExtResource("1")

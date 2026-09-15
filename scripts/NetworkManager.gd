@@ -19,6 +19,13 @@ func _ready() -> void:
 	multiplayer.connected_to_server.connect(_on_connected_ok)
 	multiplayer.connection_failed.connect(_on_connected_fail)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
+	
+func _spawn_via_spawner(id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var players_root := get_tree().current_scene.get_node("Players")
+	var spawner: MultiplayerSpawner = players_root.get_node("PlayerSpawner")
+	spawner.spawn({"id": id})
 
 func host_game(player_name: String) -> void:
 	var peer := ENetMultiplayerPeer.new()
@@ -28,7 +35,7 @@ func host_game(player_name: String) -> void:
 		return
 	multiplayer.multiplayer_peer = peer
 	players_info[1] = {"name": player_name, "role": "speaker"}
-	_do_spawn(1)
+	_spawn_via_spawner(1)
 
 func join_game(address: String, player_name: String) -> void:
 	var peer := ENetMultiplayerPeer.new()
@@ -52,37 +59,17 @@ func _register_player(id: int, player_name: String) -> void:
 		return
 	players_info[id] = {"name": player_name, "role": "audience"}
 	rpc("_sync_players", players_info)
-	_broadcast_spawn(id)
+	_spawn_via_spawner(id)
 
 @rpc("authority", "reliable")
 func _sync_players(data: Dictionary) -> void:
 	players_info = data
 
-func _broadcast_spawn(id: int) -> void:
-	# Просим всех (включая нового игрока) заспавнить недостающих игроков.
-	for existing_id in players_info.keys():
-		rpc("_do_spawn", existing_id)
-
-@rpc("authority", "call_local", "reliable")
-func _do_spawn(id: int) -> void:
-	var main := get_tree().current_scene
-	if not main or not main.has_node("Players"):
-		return
-	var players_root := main.get_node("Players")
-	if players_root.has_node(str(id)):
-		return
-	var player_scene: PackedScene = preload("res://scenes/Player.tscn")
-	var p := player_scene.instantiate()
-	p.name = str(id)
-	p.set_multiplayer_authority(id)
-	players_root.add_child(p)  
-	player_nodes[id] = p
-
 func _on_peer_disconnected(id: int) -> void:
 	players_info.erase(id)
-	if player_nodes.has(id):
+	if multiplayer.is_server() and player_nodes.has(id):
 		player_nodes[id].queue_free()
-		player_nodes.erase(id)
+	player_nodes.erase(id)
 
 func _on_connected_fail() -> void:
 	push_error("Подключение не удалось")
