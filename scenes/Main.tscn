@@ -1,0 +1,59 @@
+[gd_scene format=3 uid="uid://dxpeom20s5xy6"]
+
+[ext_resource type="Script" uid="uid://00qicrvhwqsp" path="res://scripts/LobbyUI.gd" id="1"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_floor"]
+size = Vector3(40, 1, 40)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_floor"]
+size = Vector3(40, 1, 40)
+
+[node name="Main" type="Node3D" unique_id=949152360]
+
+[node name="Floor" type="StaticBody3D" parent="." unique_id=750039163]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Floor" unique_id=807103799]
+mesh = SubResource("BoxMesh_floor")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Floor" unique_id=1248682979]
+shape = SubResource("BoxShape3D_floor")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1942327826]
+transform = Transform3D(0.866, -0.433, 0.25, 0, 0.5, 0.866, -0.5, -0.75, 0.433, 0, 10, 0)
+
+[node name="Players" type="Node3D" parent="." unique_id=1936547460]
+
+[node name="UI" type="CanvasLayer" parent="." unique_id=1851433974]
+script = ExtResource("1")
+
+[node name="Panel" type="Panel" parent="UI" unique_id=1716130502]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -150.0
+offset_top = -80.0
+offset_right = 150.0
+offset_bottom = 80.0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="UI/Panel" unique_id=1211893459]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="NameEdit" type="LineEdit" parent="UI/Panel/VBoxContainer" unique_id=1660459952]
+layout_mode = 2
+placeholder_text = "Твоё имя"
+
+[node name="IPEdit" type="LineEdit" parent="UI/Panel/VBoxContainer" unique_id=287344021]
+layout_mode = 2
+placeholder_text = "IP сервера (для подключения)"
+
+[node name="HostButton" type="Button" parent="UI/Panel/VBoxContainer" unique_id=1282617583]
+layout_mode = 2
+text = "Создать комнату"
+
+[node name="JoinButton" type="Button" parent="UI/Panel/VBoxContainer" unique_id=691997678]
+layout_mode = 2
+text = "Подключиться"
