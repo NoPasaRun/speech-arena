@@ -84,13 +84,18 @@ func relay_audio(samples: PackedFloat32Array) -> void:
 	if not multiplayer.is_server():
 		return
 	var sender_id := multiplayer.get_remote_sender_id()
+	if sender_id == 0:
+		sender_id = multiplayer.get_unique_id()
 	for peer_id in multiplayer.get_peers():
 		if peer_id != sender_id:
 			_dispatch_audio.rpc_id(peer_id, sender_id, samples)
-	# Если сервер сам физически совпадает с игроком-хостом (id 1),
-	# ему тоже можно продублировать локально при необходимости.
+	if sender_id != multiplayer.get_unique_id():
+		_play_incoming_local(sender_id, samples)
 
 @rpc("authority", "unreliable_ordered")
 func _dispatch_audio(sender_id: int, samples: PackedFloat32Array) -> void:
+	_play_incoming_local(sender_id, samples)
+
+func _play_incoming_local(sender_id: int, samples: PackedFloat32Array) -> void:
 	if player_nodes.has(sender_id) and player_nodes[sender_id].has_node("VoiceChat"):
 		player_nodes[sender_id].get_node("VoiceChat").play_incoming(samples)

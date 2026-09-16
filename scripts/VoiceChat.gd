@@ -9,7 +9,7 @@ extends Node
 
 const BUS_NAME := "Mic"
 const MIX_RATE := 24000
-const CHUNK_FRAMES := 1024
+const CHUNK_FRAMES := 256
 
 var capture_effect: AudioEffectCapture
 var playback: AudioStreamGeneratorPlayback
@@ -20,7 +20,7 @@ var enabled := false
 
 func _ready() -> void:
 	var gen := AudioStreamGenerator.new()
-	gen.mix_rate = MIX_RATE
+	gen.mix_rate = AudioServer.get_mix_rate()
 	gen.buffer_length = 0.3
 	out_player.stream = gen
 	out_player.bus = "Master"
@@ -63,6 +63,7 @@ func _process(_delta: float) -> void:
 	mono.resize(stereo_buf.size())
 	for i in stereo_buf.size():
 		mono[i] = stereo_buf[i].x
+	print("Отправляю пакет, семплов: ", mono.size())
 	NetworkManager.relay_audio.rpc_id(1, mono)
 
 func play_incoming(samples: PackedFloat32Array) -> void:
