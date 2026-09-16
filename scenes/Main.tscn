@@ -53,6 +53,7 @@ placeholder_text = "Твоё имя"
 
 [node name="IPEdit" type="LineEdit" parent="UI/Panel/VBoxContainer" unique_id=287344021]
 layout_mode = 2
+text = "10.45.117.198"
 placeholder_text = "IP сервера (для подключения)"
 
 [node name="HostButton" type="Button" parent="UI/Panel/VBoxContainer" unique_id=1282617583]
