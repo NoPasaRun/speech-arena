@@ -16,10 +16,16 @@ extends Node
 # Контракт бэкенда: POST BACKEND_URL, multipart/form-data:
 #   turn_id (int), scenario (string), events (JSON-строка
 #   [{"type","object","t"}]), audio (turn.wav, 16-bit PCM mono)
-# Ответ JSON: {transcript, reply_text, action, score_delta, audio_base64 (mp3)}
+# Ответ JSON: {transcript, reply_text, action, score_delta, audio_base64 (mp3),
+#              time (сек, опционально)}
 # audio_base64 может быть пустым — тогда сервер сам озвучит reply_text
 # через espeak-ng (см. _synthesize_speech), а на выходе отдаст его же
 # клиентам как WAV. Клиент (_bytes_to_audio_stream) понимает и mp3, и WAV.
+# time — сколько длится реплика NPC; на это время сервер задерживает старт
+# следующего хода игрока (_on_npc_wait_timeout), чтобы таймер игрока не тикал,
+# пока NPC ещё "говорит". Если бэкенд его не прислал (или прислал 0/пусто),
+# сервер сам оценивает длительность по audio_base64, а если и это не вышло —
+# по длине текста (см. _estimate_npc_duration).
 
 const BACKEND_URL := "http://127.0.0.1:8000/api/npc_turn"
 const TURN_DURATION_SEC := 30.0
@@ -28,7 +34,7 @@ const REQUEST_TIMEOUT_SEC := 10.0
 enum State { IDLE, PLAYER_TURN, PROCESSING, NPC_TURN }
 
 signal turn_started(turn_id: int, duration_sec: float)
-signal npc_turn_received(turn_id: int, reply_text: String, action: String, score_delta: int, total_score: int, audio_base64: String)
+signal npc_turn_received(turn_id: int, transcript: String, reply_text: String, action: String, score_delta: int, total_score: int, audio_base64: String)
 
 # ---- клиентское состояние (только "своя" комната) ----
 var state: State = State.IDLE
@@ -50,6 +56,7 @@ class RoomTurn:
 	var turn_start_ticks_msec := 0
 	var audio_buffer: PackedFloat32Array = PackedFloat32Array()
 	var timer: Timer
+	var npc_wait_timer: Timer
 	var http: HTTPRequest
 
 var _rooms: Dictionary = {}  # room_id -> RoomTurn (актуально только на выделенном сервере)
@@ -67,6 +74,10 @@ func start_match(room_id: String, player_id: int) -> void:
 	rt.timer.one_shot = true
 	rt.timer.timeout.connect(_on_turn_timeout.bind(room_id))
 	add_child(rt.timer)
+	rt.npc_wait_timer = Timer.new()
+	rt.npc_wait_timer.one_shot = true
+	rt.npc_wait_timer.timeout.connect(_on_npc_wait_timeout.bind(room_id))
+	add_child(rt.npc_wait_timer)
 	rt.http = HTTPRequest.new()
 	rt.http.timeout = REQUEST_TIMEOUT_SEC
 	add_child(rt.http)
@@ -79,6 +90,7 @@ func cleanup_room(room_id: String) -> void:
 		return
 	var rt: RoomTurn = _rooms[room_id]
 	rt.timer.queue_free()
+	rt.npc_wait_timer.queue_free()
 	rt.http.queue_free()
 	_rooms.erase(room_id)
 
@@ -210,14 +222,15 @@ func _on_backend_response(result: int, response_code: int, _headers: PackedStrin
 		parsed.get("reply_text", ""),
 		parsed.get("action", ""),
 		parsed.get("score_delta", 0),
-		parsed.get("audio_base64", "")
+		parsed.get("audio_base64", ""),
+		float(parsed.get("time", 0.0))
 	)
 
 func _fallback_npc_turn(room_id: String) -> void:
 	var reply: String = _FALLBACK_REPLIES[randi() % _FALLBACK_REPLIES.size()]
-	_apply_npc_turn(room_id, "", reply, "idle", 0, "")
+	_apply_npc_turn(room_id, "", reply, "idle", 0, "", 0.0)
 
-func _apply_npc_turn(room_id: String, transcript: String, reply_text: String, action: String, score_delta: int, audio_base64: String) -> void:
+func _apply_npc_turn(room_id: String, transcript: String, reply_text: String, action: String, score_delta: int, audio_base64: String, explicit_duration_sec: float = 0.0) -> void:
 	var rt: RoomTurn = _rooms[room_id]
 	print("[Ход %d] Игрок сказал: %s" % [rt.current_turn_id, transcript if transcript != "" else "(речь не распознана)"])
 	if not rt.turn_events.is_empty():
@@ -232,17 +245,43 @@ func _apply_npc_turn(room_id: String, transcript: String, reply_text: String, ac
 	rt.state = State.NPC_TURN
 	rt.total_score += score_delta
 	for pid in NetworkManager.room_peer_ids(room_id):
-		_broadcast_npc_turn.rpc_id(pid, rt.current_turn_id, reply_text, action, score_delta, rt.total_score, audio_base64)
+		_broadcast_npc_turn.rpc_id(pid, rt.current_turn_id, transcript, reply_text, action, score_delta, rt.total_score, audio_base64)
 	if action != "":
 		_broadcast_event(room_id, action)
-	_start_player_turn(room_id)
+	# Следующий ход игрока стартует не сразу, а после того как реплика NPC
+	# "доиграет" — иначе таймер игрока тикал бы поверх ещё звучащего ответа.
+	var npc_duration := _estimate_npc_duration(explicit_duration_sec, audio_base64, reply_text)
+	rt.npc_wait_timer.start(npc_duration)
+
+func _on_npc_wait_timeout(room_id: String) -> void:
+	if _rooms.has(room_id):
+		_start_player_turn(room_id)
+
+# Сколько будет "говорить" NPC: явное значение от бэкенда > длительность
+# присланного/синтезированного аудио (по WAV-заголовку) > грубая оценка по
+# длине текста (для mp3 без декодера или полного отсутствия звука).
+func _estimate_npc_duration(explicit_duration_sec: float, audio_base64: String, reply_text: String) -> float:
+	if explicit_duration_sec > 0.0:
+		return explicit_duration_sec
+	if not audio_base64.is_empty():
+		var raw_bytes := Marshalls.base64_to_raw(audio_base64)
+		if raw_bytes.size() > 44 and raw_bytes.slice(0, 4).get_string_from_ascii() == "RIFF":
+			var channels := raw_bytes.decode_u16(22)
+			var sample_rate := raw_bytes.decode_u32(24)
+			var bits := raw_bytes.decode_u16(34)
+			var bytes_per_sample := bits / 8
+			if sample_rate > 0 and channels > 0 and bytes_per_sample > 0:
+				var data_len := raw_bytes.size() - 44
+				return maxf(float(data_len) / float(sample_rate * channels * bytes_per_sample), 1.0)
+	return maxf(reply_text.length() * 0.07, 1.0)
 
 @rpc("authority", "reliable")
-func _broadcast_npc_turn(turn_id: int, reply_text: String, action: String, score_delta: int, new_total_score: int, audio_base64: String) -> void:
+func _broadcast_npc_turn(turn_id: int, transcript: String, reply_text: String, action: String, score_delta: int, new_total_score: int, audio_base64: String) -> void:
+	print("[Ход %d] Ты сказал: %s" % [turn_id, transcript if transcript != "" else "(речь не распознана)"])
 	print("[Ход %d] NPC: %s (action=%s, score_delta=%d, total=%d)" % [turn_id, reply_text, action, score_delta, new_total_score])
 	state = State.NPC_TURN
 	total_score = new_total_score
-	npc_turn_received.emit(turn_id, reply_text, action, score_delta, new_total_score, audio_base64)
+	npc_turn_received.emit(turn_id, transcript, reply_text, action, score_delta, new_total_score, audio_base64)
 	if audio_base64.is_empty():
 		_speak_npc_text(reply_text)
 	else:
