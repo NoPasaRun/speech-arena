@@ -29,7 +29,7 @@ extends Node
 
 const BACKEND_URL := "http://127.0.0.1:8000/api/npc_turn"
 const TURN_DURATION_SEC := 30.0
-const REQUEST_TIMEOUT_SEC := 10.0
+const REQUEST_TIMEOUT_SEC := 100.0 # LLM на бэкенде медленный (десятки секунд на реплику)
 
 enum State { IDLE, PLAYER_TURN, PROCESSING, NPC_TURN }
 
