@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://00qicrvhwqsp" path="res://scripts/LobbyUI.gd" id="1"]
 [ext_resource type="Script" uid="uid://cabr863mvlvw3" path="res://scripts/Main.gd" id="1_rvslj"]
+[ext_resource type="Script" uid="uid://cesy0jj2ytdix" path="res://scripts/TurnUI.gd" id="4_turnui"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_floor"]
 size = Vector3(40, 1, 40)
@@ -51,10 +52,9 @@ anchor_bottom = 1.0
 layout_mode = 2
 placeholder_text = "Твоё имя"
 
-[node name="IPEdit" type="LineEdit" parent="UI/Panel/VBoxContainer" unique_id=287344021]
+[node name="RoomIdEdit" type="LineEdit" parent="UI/Panel/VBoxContainer" unique_id=287344021]
 layout_mode = 2
-text = "10.45.117.198"
-placeholder_text = "IP сервера (для подключения)"
+placeholder_text = "Код комнаты (для подключения)"
 
 [node name="HostButton" type="Button" parent="UI/Panel/VBoxContainer" unique_id=1282617583]
 layout_mode = 2
@@ -63,3 +63,45 @@ text = "Создать комнату"
 [node name="JoinButton" type="Button" parent="UI/Panel/VBoxContainer" unique_id=691997678]
 layout_mode = 2
 text = "Подключиться"
+
+[node name="StatusLabel" type="Label" parent="UI/Panel/VBoxContainer" unique_id=691997679]
+layout_mode = 2
+autowrap_mode = 3
+
+[node name="TurnUI" type="CanvasLayer" parent="." unique_id=300000001]
+script = ExtResource("4_turnui")
+
+[node name="Panel" type="Panel" parent="TurnUI" unique_id=300000002]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -180.0
+offset_top = 20.0
+offset_right = 180.0
+offset_bottom = 150.0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="TurnUI/Panel" unique_id=300000003]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = -8.0
+
+[node name="StatusLabel" type="Label" parent="TurnUI/Panel/VBoxContainer" unique_id=300000004]
+layout_mode = 2
+text = "Ожидание начала сессии..."
+autowrap_mode = 3
+
+[node name="TimeLabel" type="Label" parent="TurnUI/Panel/VBoxContainer" unique_id=300000006]
+layout_mode = 2
+
+[node name="ScoreLabel" type="Label" parent="TurnUI/Panel/VBoxContainer" unique_id=300000007]
+layout_mode = 2
+text = "Счёт: 0"
+
+[node name="EndTurnButton" type="Button" parent="TurnUI/Panel/VBoxContainer" unique_id=300000005]
+layout_mode = 2
+disabled = true
+text = "Завершить ход"
