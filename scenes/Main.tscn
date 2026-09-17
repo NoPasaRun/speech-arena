@@ -96,8 +96,8 @@ text = "Ожидание начала сессии..."
 autowrap_mode = 3
 
 [node name="StartButton" type="Button" parent="TurnUI/Panel/VBoxContainer" unique_id=300000008]
-layout_mode = 2
 visible = false
+layout_mode = 2
 text = "Начать сессию"
 
 [node name="TimeLabel" type="Label" parent="TurnUI/Panel/VBoxContainer" unique_id=300000006]

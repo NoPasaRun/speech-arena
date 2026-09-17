@@ -62,7 +62,7 @@ func _on_turn_started(turn_id: int, duration_sec: float) -> void:
 	_counting_down = true
 	end_turn_button.disabled = not _is_speaker()
 
-func _on_npc_turn_received(_turn_id: int, reply_text: String, _action: String, _score_delta: int, total_score: int, _audio_base64: String) -> void:
+func _on_npc_turn_received(_turn_id: int, _transcript: String, reply_text: String, _action: String, _score_delta: int, total_score: int, _audio_base64: String) -> void:
 	status_label.text = "NPC: %s" % reply_text
 	score_label.text = "Счёт: %d" % total_score
 	_counting_down = false
