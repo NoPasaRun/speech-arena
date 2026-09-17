@@ -36,6 +36,12 @@ SCENARIOS = {
 }
 DEFAULT_SCENARIO = "restaurant_date"
 
+# Словарь жестов NPC-болванчика на сцене (см. Npc.gd на стороне Godot —
+# именно эти строки там задают анимацию твинами). Всё, чего нет в этом
+# списке, при парсинге отбрасывается.
+VALID_ACTIONS = {"talk", "turn", "nod", "shrug", "idle"}
+DEFAULT_ACTIONS = ["talk"]
+
 # CJK-диапазоны — маленькая модель иногда сваливается в китайский посреди
 # русского ответа, это защитная зачистка на выходе (см. _clean_reply_text).
 _CJK_RE = re.compile(r"[一-鿿㐀-䶿豈-﫿]+")
@@ -71,7 +77,9 @@ def _build_messages(scenario: str, transcript: str, events: list) -> list:
         "Ответь СТРОГО в этом текстовом формате, ровно три строки, без "
         "markdown, без JSON, без лишних пояснений:\n"
         "РЕПЛИКА: <твоя реплика, 1-2 коротких предложения>\n"
-        "ДЕЙСТВИЕ: idle\n"
+        "ДЕЙСТВИЯ: <от 1 до 3 жестов через запятую строго из списка: "
+        "talk, turn, nod, shrug, idle — talk означает, что в этот момент "
+        "ты говоришь реплику, остальные — молчаливые жесты>\n"
         "ОЦЕНКА: <целое число от -2 до 3, насколько удачно прошёл ход>"
     )
     return [
@@ -86,17 +94,22 @@ def _build_messages(scenario: str, transcript: str, events: list) -> list:
 # экранирования — гораздо надёжнее.
 def _parse_npc_response(text: str) -> dict:
     reply_match = re.search(
-        r"РЕПЛИКА\s*:\s*(.+?)(?:\n\s*ДЕЙСТВИЕ\s*:|\Z)", text, re.DOTALL | re.IGNORECASE
+        r"РЕПЛИКА\s*:\s*(.+?)(?:\n\s*ДЕЙСТВИ[ЯЕ]\s*:|\Z)", text, re.DOTALL | re.IGNORECASE
     )
-    action_match = re.search(r"ДЕЙСТВИЕ\s*:\s*(\S+)", text, re.IGNORECASE)
+    actions_match = re.search(r"ДЕЙСТВИ[ЯЕ]\s*:\s*(.+)", text, re.IGNORECASE)
     score_match = re.search(r"ОЦЕНКА\s*:\s*(-?\d+)", text, re.IGNORECASE)
     reply_text = (reply_match.group(1) if reply_match else text).strip()
-    action = action_match.group(1).strip() if action_match else "idle"
+    actions = DEFAULT_ACTIONS
+    if actions_match:
+        raw = [a.strip().lower() for a in actions_match.group(1).split(",")]
+        valid = [a for a in raw if a in VALID_ACTIONS]
+        if valid:
+            actions = valid[:3]
     try:
         score_delta = int(score_match.group(1)) if score_match else 0
     except ValueError:
         score_delta = 0
-    return {"reply_text": reply_text, "action": action, "score_delta": score_delta}
+    return {"reply_text": reply_text, "actions": actions, "score_delta": score_delta}
 
 
 def _clean_reply_text(text: str) -> str:
@@ -146,7 +159,7 @@ async def npc_turn(
     return JSONResponse({
         "transcript": transcript,
         "reply_text": npc["reply_text"],
-        "action": npc["action"],
+        "actions": npc["actions"],
         "score_delta": npc["score_delta"],
         "audio_base64": "",
     })

@@ -16,8 +16,9 @@ extends Node
 # Контракт бэкенда: POST BACKEND_URL, multipart/form-data:
 #   turn_id (int), scenario (string), events (JSON-строка
 #   [{"type","object","t"}]), audio (turn.wav, 16-bit PCM mono)
-# Ответ JSON: {transcript, reply_text, action, score_delta, audio_base64 (mp3),
-#              time (сек, опционально)}
+# Ответ JSON: {transcript, reply_text, actions (массив строк из словаря
+#              "talk"/"turn"/"nod"/"shrug"/"idle", см. Npc.gd), score_delta,
+#              audio_base64 (mp3), time (сек, опционально)}
 # audio_base64 может быть пустым — тогда сервер сам озвучит reply_text
 # через espeak-ng (см. _synthesize_speech), а на выходе отдаст его же
 # клиентам как WAV. Клиент (_bytes_to_audio_stream) понимает и mp3, и WAV.
@@ -34,7 +35,8 @@ const REQUEST_TIMEOUT_SEC := 100.0 # LLM на бэкенде медленный 
 enum State { IDLE, PLAYER_TURN, PROCESSING, NPC_TURN }
 
 signal turn_started(turn_id: int, duration_sec: float)
-signal npc_turn_received(turn_id: int, transcript: String, reply_text: String, action: String, score_delta: int, total_score: int, audio_base64: String)
+signal processing_started()
+signal npc_turn_received(turn_id: int, transcript: String, reply_text: String, actions: PackedStringArray, score_delta: int, total_score: int, audio_base64: String)
 
 # ---- клиентское состояние (только "своя" комната) ----
 var state: State = State.IDLE
@@ -114,7 +116,7 @@ func _on_turn_started(turn_id: int, duration_sec: float) -> void:
 # Приём данных от игрока во время хода
 # ---------------------------------------------------------------------------
 
-@rpc("any_peer", "unreliable_ordered")
+@rpc("any_peer", "reliable")
 func submit_audio_chunk(samples: PackedFloat32Array) -> void:
 	if not multiplayer.is_server():
 		return
@@ -162,7 +164,14 @@ func _end_player_turn(room_id: String) -> void:
 	var rt: RoomTurn = _rooms[room_id]
 	rt.timer.stop()
 	rt.state = State.PROCESSING
+	for pid in NetworkManager.room_peer_ids(room_id):
+		_on_processing_started.rpc_id(pid)
 	_send_turn_to_backend(room_id)
+
+@rpc("authority", "reliable")
+func _on_processing_started() -> void:
+	state = State.PROCESSING
+	processing_started.emit()
 
 # ---------------------------------------------------------------------------
 # Запрос к AI-бэкенду
@@ -216,11 +225,16 @@ func _on_backend_response(result: int, response_code: int, _headers: PackedStrin
 		_fallback_npc_turn(room_id)
 		return
 
+	var raw_actions = parsed.get("actions", [])
+	var actions_array := PackedStringArray()
+	if raw_actions is Array:
+		for a in raw_actions:
+			actions_array.append(str(a))
 	_apply_npc_turn(
 		room_id,
 		parsed.get("transcript", ""),
 		parsed.get("reply_text", ""),
-		parsed.get("action", ""),
+		actions_array,
 		parsed.get("score_delta", 0),
 		parsed.get("audio_base64", ""),
 		float(parsed.get("time", 0.0))
@@ -228,9 +242,9 @@ func _on_backend_response(result: int, response_code: int, _headers: PackedStrin
 
 func _fallback_npc_turn(room_id: String) -> void:
 	var reply: String = _FALLBACK_REPLIES[randi() % _FALLBACK_REPLIES.size()]
-	_apply_npc_turn(room_id, "", reply, "idle", 0, "", 0.0)
+	_apply_npc_turn(room_id, "", reply, PackedStringArray(["idle"]), 0, "", 0.0)
 
-func _apply_npc_turn(room_id: String, transcript: String, reply_text: String, action: String, score_delta: int, audio_base64: String, explicit_duration_sec: float = 0.0) -> void:
+func _apply_npc_turn(room_id: String, transcript: String, reply_text: String, actions: PackedStringArray, score_delta: int, audio_base64: String, explicit_duration_sec: float = 0.0) -> void:
 	var rt: RoomTurn = _rooms[room_id]
 	print("[Ход %d] Игрок сказал: %s" % [rt.current_turn_id, transcript if transcript != "" else "(речь не распознана)"])
 	if not rt.turn_events.is_empty():
@@ -245,9 +259,7 @@ func _apply_npc_turn(room_id: String, transcript: String, reply_text: String, ac
 	rt.state = State.NPC_TURN
 	rt.total_score += score_delta
 	for pid in NetworkManager.room_peer_ids(room_id):
-		_broadcast_npc_turn.rpc_id(pid, rt.current_turn_id, transcript, reply_text, action, score_delta, rt.total_score, audio_base64)
-	if action != "":
-		_broadcast_event(room_id, action)
+		_broadcast_npc_turn.rpc_id(pid, rt.current_turn_id, transcript, reply_text, actions, score_delta, rt.total_score, audio_base64)
 	# Следующий ход игрока стартует не сразу, а после того как реплика NPC
 	# "доиграет" — иначе таймер игрока тикал бы поверх ещё звучащего ответа.
 	var npc_duration := _estimate_npc_duration(explicit_duration_sec, audio_base64, reply_text)
@@ -276,12 +288,12 @@ func _estimate_npc_duration(explicit_duration_sec: float, audio_base64: String, 
 	return maxf(reply_text.length() * 0.07, 1.0)
 
 @rpc("authority", "reliable")
-func _broadcast_npc_turn(turn_id: int, transcript: String, reply_text: String, action: String, score_delta: int, new_total_score: int, audio_base64: String) -> void:
+func _broadcast_npc_turn(turn_id: int, transcript: String, reply_text: String, actions: PackedStringArray, score_delta: int, new_total_score: int, audio_base64: String) -> void:
 	print("[Ход %d] Ты сказал: %s" % [turn_id, transcript if transcript != "" else "(речь не распознана)"])
-	print("[Ход %d] NPC: %s (action=%s, score_delta=%d, total=%d)" % [turn_id, reply_text, action, score_delta, new_total_score])
+	print("[Ход %d] NPC: %s (actions=%s, score_delta=%d, total=%d)" % [turn_id, reply_text, actions, score_delta, new_total_score])
 	state = State.NPC_TURN
 	total_score = new_total_score
-	npc_turn_received.emit(turn_id, transcript, reply_text, action, score_delta, new_total_score, audio_base64)
+	npc_turn_received.emit(turn_id, transcript, reply_text, actions, score_delta, new_total_score, audio_base64)
 	if audio_base64.is_empty():
 		_speak_npc_text(reply_text)
 	else:

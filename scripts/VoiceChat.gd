@@ -66,6 +66,9 @@ func _process(_delta: float) -> void:
 	NetworkManager.relay_audio.rpc_id(1, mono)
 	# Параллельно кормим буфер хода для AI-бэкенда (сервер сам отфильтрует
 	# по current_player_id, если сейчас не мой ход — пакет просто отбросит).
+	# В отличие от relay_audio (unreliable — живой звук, потеря кадра не
+	# страшна), здесь reliable: это идёт в STT, и пропущенный чанк — дыра в
+	# записи и мусор на выходе распознавания, а не лёгкий дребезг в голосе.
 	TurnManager.submit_audio_chunk.rpc_id(1, mono)
 
 func play_incoming(samples: PackedFloat32Array) -> void:

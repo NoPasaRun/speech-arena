@@ -1,3 +1,5 @@
 exports
 .git
 .godot
+backend/venv
+backend/__pycache__
