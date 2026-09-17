@@ -29,10 +29,18 @@ SCENARIOS = {
         "Держись дружелюбно, немного застенчиво, живо реагируй на то, что "
         "говорит собеседник и что он делает. Отвечай ТОЛЬКО на русском "
         "языке, 1-2 короткими разговорными предложениями — это озвучат вслух "
-        "текст-в-речь, поэтому не используй эмодзи и markdown."
+        "текст-в-речь, поэтому не используй эмодзи и markdown. Никогда не "
+        "используй китайские иероглифы, английские или любые другие "
+        "нерусские слова — только русский язык."
     ),
 }
 DEFAULT_SCENARIO = "restaurant_date"
+
+# CJK-диапазоны — маленькая модель иногда сваливается в китайский посреди
+# русского ответа, это защитная зачистка на выходе (см. _clean_reply_text).
+_CJK_RE = re.compile(r"[一-鿿㐀-䶿豈-﫿]+")
+_MULTI_SPACE_RE = re.compile(r"[ \t]{2,}")
+_MAX_REPLY_CHARS = 300
 
 app = FastAPI()
 _whisper = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
@@ -60,9 +68,11 @@ def _build_messages(scenario: str, transcript: str, events: list) -> list:
     user_content = (
         f'Игрок сказал: "{transcript or "(тишина, ничего не расслышала)"}"'
         f"{events_desc}\n\n"
-        "Ответь строго в виде JSON без markdown-обрамления, вот формат:\n"
-        '{"reply_text": "<твоя реплика>", "action": "idle", '
-        '"score_delta": <целое число от -2 до 3, насколько удачно прошёл ход>}'
+        "Ответь СТРОГО в этом текстовом формате, ровно три строки, без "
+        "markdown, без JSON, без лишних пояснений:\n"
+        "РЕПЛИКА: <твоя реплика, 1-2 коротких предложения>\n"
+        "ДЕЙСТВИЕ: idle\n"
+        "ОЦЕНКА: <целое число от -2 до 3, насколько удачно прошёл ход>"
     )
     return [
         {"role": "system", "content": persona},
@@ -70,14 +80,33 @@ def _build_messages(scenario: str, transcript: str, events: list) -> list:
     ]
 
 
-def _extract_json(text: str) -> dict:
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        return {}
+# Просим НЕ json, а простой построчный формат: маленькие модели регулярно
+# ломают валидный JSON, если реплика сама содержит кавычки (см. историю
+# правок), а с текстовыми метками парсить эту же реплику дословно — без
+# экранирования — гораздо надёжнее.
+def _parse_npc_response(text: str) -> dict:
+    reply_match = re.search(
+        r"РЕПЛИКА\s*:\s*(.+?)(?:\n\s*ДЕЙСТВИЕ\s*:|\Z)", text, re.DOTALL | re.IGNORECASE
+    )
+    action_match = re.search(r"ДЕЙСТВИЕ\s*:\s*(\S+)", text, re.IGNORECASE)
+    score_match = re.search(r"ОЦЕНКА\s*:\s*(-?\d+)", text, re.IGNORECASE)
+    reply_text = (reply_match.group(1) if reply_match else text).strip()
+    action = action_match.group(1).strip() if action_match else "idle"
     try:
-        return json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return {}
+        score_delta = int(score_match.group(1)) if score_match else 0
+    except ValueError:
+        score_delta = 0
+    return {"reply_text": reply_text, "action": action, "score_delta": score_delta}
+
+
+def _clean_reply_text(text: str) -> str:
+    text = _CJK_RE.sub("", text)
+    text = _MULTI_SPACE_RE.sub(" ", text).strip()
+    if len(text) > _MAX_REPLY_CHARS:
+        text = text[:_MAX_REPLY_CHARS].rstrip() + "…"
+    if not text:
+        text = "..."
+    return text
 
 
 async def _ask_npc(scenario: str, transcript: str, events: list) -> dict:
@@ -89,14 +118,9 @@ async def _ask_npc(scenario: str, transcript: str, events: list) -> dict:
         })
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
-    parsed = _extract_json(content)
-    reply_text = str(parsed.get("reply_text") or content).strip()
-    action = str(parsed.get("action") or "idle")
-    try:
-        score_delta = int(parsed.get("score_delta", 0) or 0)
-    except (TypeError, ValueError):
-        score_delta = 0
-    return {"reply_text": reply_text, "action": action, "score_delta": score_delta}
+    parsed = _parse_npc_response(content)
+    parsed["reply_text"] = _clean_reply_text(parsed["reply_text"])
+    return parsed
 
 
 @app.post("/api/npc_turn")
