@@ -12,11 +12,13 @@ extends Node
 #    реализация — см. README, для продакшена заменить на WebRTC + SFU).
 #
 # ВНИМАНИЕ (известное ограничение): спавн игроков сейчас идёт через ОДИН
-# общий MultiplayerSpawner на весь процесс, поэтому аватары из разных комнат
-# технически реплицируются всем — на клиенте это просто лишний неподвижный
-# узел без синка позиции (VoiceChat/позиция чужой комнаты не текут, т.к. вся
-# остальная логика уже фильтруется по комнате), но для чистоты в будущем
-# стоит добавить MultiplayerSynchronizer.set_visibility_for() по комнате.
+# общий MultiplayerSpawner на весь процесс, поэтому сам факт спавна узла
+# технически реплицируется всем — на клиенте чужой комнаты это лишний узел
+# в сцене. Но его позиция/поворот (MultiplayerSynchronizer) больше НЕ текут
+# за пределы комнаты: public_visibility=false в Player.tscn + точечные
+# set_visibility_for() в _grant_room_visibility() ниже. Полностью убрать
+# и сам "призрачный" узел можно только настоящим разделением на per-room
+# MultiplayerAPI/ENet-пир — сознательно не делали, см. обсуждение в чате.
 
 const SERVER_PORT := 7777
 const MAX_PLAYERS := 128
@@ -131,13 +133,48 @@ func _request_join_room(room_id: String, player_name: String) -> void:
 func _join_room_internal(room_id: String, peer_id: int, player_name: String) -> void:
 	var room: RoomData = _rooms[room_id]
 	var role := "speaker" if room.players_info.is_empty() else "audience"
+	var existing_peers := room.players_info.keys()
 	room.players_info[peer_id] = {"name": player_name, "role": role}
 	_peer_room[peer_id] = room_id
 	_spawn_via_spawner(peer_id)
+	_grant_room_visibility(peer_id, existing_peers)
 	for pid in room.players_info.keys():
 		rpc_id(pid, "_room_state", room_id, room.players_info)
-	if role == "speaker":
-		TurnManager.start_match(room_id, peer_id)
+
+# Игрок-спикер жмёт кнопку "Начать сессию" в TurnUI уже ПОСЛЕ телепортации
+# в сцену — сессия больше не стартует автоматически при создании комнаты.
+@rpc("any_peer", "reliable")
+func request_start_session() -> void:
+	if not multiplayer.is_server():
+		return
+	var sender_id := multiplayer.get_remote_sender_id()
+	var room_id := room_of_peer(sender_id)
+	if room_id == "" or not _rooms.has(room_id):
+		return
+	var room: RoomData = _rooms[room_id]
+	var info: Dictionary = room.players_info.get(sender_id, {})
+	if info.get("role", "") != "speaker":
+		return
+	TurnManager.start_match(room_id, sender_id)
+
+# Аватары спавнятся через ОДИН общий MultiplayerSpawner на весь процесс (см.
+# известное ограничение в шапке файла), поэтому сам факт спавна виден всем
+# комнатам. Но позицию/поворот (MultiplayerSynchronizer) включаем только
+# внутри своей комнаты — иначе чужая комната видела бы, как двигается не их
+# собеседник.
+func _grant_room_visibility(new_peer_id: int, existing_peers: Array) -> void:
+	var new_sync := _get_synchronizer(new_peer_id)
+	for pid in existing_peers:
+		var other_sync := _get_synchronizer(pid)
+		if new_sync:
+			new_sync.set_visibility_for(pid, true)
+		if other_sync:
+			other_sync.set_visibility_for(new_peer_id, true)
+
+func _get_synchronizer(peer_id: int) -> MultiplayerSynchronizer:
+	if not player_nodes.has(peer_id):
+		return null
+	return player_nodes[peer_id].get_node("MultiplayerSynchronizer") as MultiplayerSynchronizer
 
 func _generate_room_id() -> String:
 	var id := ""

@@ -2,8 +2,8 @@
 
 [ext_resource type="Script" uid="uid://00qicrvhwqsp" path="res://scripts/LobbyUI.gd" id="1"]
 [ext_resource type="Script" uid="uid://cabr863mvlvw3" path="res://scripts/Main.gd" id="1_rvslj"]
-[ext_resource type="Script" uid="uid://cesy0jj2ytdix" path="res://scripts/TurnUI.gd" id="4_turnui"]
 [ext_resource type="PackedScene" uid="uid://chwkqxl2i5i14" path="res://models/office_light.glb" id="3_0bbpv"]
+[ext_resource type="Script" uid="uid://cesy0jj2ytdix" path="res://scripts/TurnUI.gd" id="4_turnui"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_floor"]
 size = Vector3(40, 1, 40)
@@ -95,6 +95,11 @@ layout_mode = 2
 text = "Ожидание начала сессии..."
 autowrap_mode = 3
 
+[node name="StartButton" type="Button" parent="TurnUI/Panel/VBoxContainer" unique_id=300000008]
+layout_mode = 2
+visible = false
+text = "Начать сессию"
+
 [node name="TimeLabel" type="Label" parent="TurnUI/Panel/VBoxContainer" unique_id=300000006]
 layout_mode = 2
 
@@ -108,3 +113,4 @@ disabled = true
 text = "Завершить ход"
 
 [node name="office_light" parent="." unique_id=835364470 instance=ExtResource("3_0bbpv")]
+visible = false
