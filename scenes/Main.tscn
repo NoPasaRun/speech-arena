@@ -4,6 +4,8 @@
 [ext_resource type="Script" uid="uid://cabr863mvlvw3" path="res://scripts/Main.gd" id="1_rvslj"]
 [ext_resource type="PackedScene" uid="uid://chwkqxl2i5i14" path="res://models/office_light.glb" id="3_0bbpv"]
 [ext_resource type="Script" uid="uid://cesy0jj2ytdix" path="res://scripts/TurnUI.gd" id="4_turnui"]
+[ext_resource type="Script" path="res://scripts/Npc.gd" id="5_npc"]
+[ext_resource type="PackedScene" path="res://assets/decor/npc_placeholder.glb" id="6_npcmodel"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_floor"]
 size = Vector3(40, 1, 40)
@@ -114,3 +116,9 @@ text = "Завершить ход"
 
 [node name="office_light" parent="." unique_id=835364470 instance=ExtResource("3_0bbpv")]
 visible = false
+
+[node name="Npc" type="Node3D" parent="." unique_id=700000001]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, -3)
+script = ExtResource("5_npc")
+
+[node name="Model" parent="Npc" unique_id=700000002 instance=ExtResource("6_npcmodel")]

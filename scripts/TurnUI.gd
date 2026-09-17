@@ -21,6 +21,7 @@ func _ready() -> void:
 	end_turn_button.pressed.connect(_on_end_turn_pressed)
 	start_button.pressed.connect(_on_start_pressed)
 	TurnManager.turn_started.connect(_on_turn_started)
+	TurnManager.processing_started.connect(_on_processing_started)
 	TurnManager.npc_turn_received.connect(_on_npc_turn_received)
 	NetworkManager.room_ready.connect(_on_room_ready)
 	status_label.text = "Ожидание начала сессии..."
@@ -54,6 +55,12 @@ func _on_end_turn_pressed() -> void:
 	TurnManager.request_end_turn.rpc_id(1)
 	end_turn_button.disabled = true
 
+func _on_processing_started() -> void:
+	_counting_down = false
+	time_label.text = ""
+	status_label.text = "NPC думает..."
+	end_turn_button.disabled = true
+
 func _on_turn_started(turn_id: int, duration_sec: float) -> void:
 	_session_started = true
 	start_button.visible = false
@@ -62,7 +69,7 @@ func _on_turn_started(turn_id: int, duration_sec: float) -> void:
 	_counting_down = true
 	end_turn_button.disabled = not _is_speaker()
 
-func _on_npc_turn_received(_turn_id: int, _transcript: String, reply_text: String, _action: String, _score_delta: int, total_score: int, _audio_base64: String) -> void:
+func _on_npc_turn_received(_turn_id: int, _transcript: String, reply_text: String, _actions: PackedStringArray, _score_delta: int, total_score: int, _audio_base64: String) -> void:
 	status_label.text = "NPC: %s" % reply_text
 	score_label.text = "Счёт: %d" % total_score
 	_counting_down = false
