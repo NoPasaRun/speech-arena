@@ -26,6 +26,7 @@ driver/enable_input=true
 [autoload]
 
 NetworkManager="*res://scripts/NetworkManager.gd"
+TurnManager="*res://scripts/TurnManager.gd"
 
 [input]
 

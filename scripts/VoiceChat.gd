@@ -65,6 +65,9 @@ func _process(_delta: float) -> void:
 		mono[i] = stereo_buf[i].x
 	print("Отправляю пакет, семплов: ", mono.size())
 	NetworkManager.relay_audio.rpc_id(1, mono)
+	# Параллельно кормим буфер хода для AI-бэкенда (сервер сам отфильтрует
+	# по current_player_id, если сейчас не мой ход — пакет просто отбросит).
+	TurnManager.submit_audio_chunk.rpc_id(1, mono)
 
 func play_incoming(samples: PackedFloat32Array) -> void:
 	if playback == null:

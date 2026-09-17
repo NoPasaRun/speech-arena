@@ -1,75 +1,102 @@
 extends Node
 
 # Синглтон (автозагрузка). Отвечает за:
-# 1. Хостинг/подключение к комнате (ENet, топология звезда: Client-Server-Client)
-# 2. Спавн игроков в сцене
-# 3. Релей "сырого" голоса через сервер (тестовая реализация — см. README,
-#    для продакшена заменить на WebRTC + SFU типа LiveKit/mediasoup)
+# 1. Выделенный сервер: держит ENet-порт и раздаёт комнаты по коду (room_id).
+#    Один процесс обслуживает СРАЗУ несколько комнат — состояние каждой
+#    комнаты живёт в _rooms[room_id], а не в полях этого узла, поэтому
+#    комнаты не мешают друг другу.
+# 2. Клиент: подключается к выделенному серверу и создаёт/входит в комнату
+#    по её коду вместо прямого подключения к IP другого игрока.
+# 3. Спавн игроков через общий MultiplayerSpawner (см. Main.gd).
+# 4. Релей "сырого" голоса через сервер, в пределах одной комнаты (тестовая
+#    реализация — см. README, для продакшена заменить на WebRTC + SFU).
+#
+# ВНИМАНИЕ (известное ограничение): спавн игроков сейчас идёт через ОДИН
+# общий MultiplayerSpawner на весь процесс, поэтому аватары из разных комнат
+# технически реплицируются всем — на клиенте это просто лишний неподвижный
+# узел без синка позиции (VoiceChat/позиция чужой комнаты не текут, т.к. вся
+# остальная логика уже фильтруется по комнате), но для чистоты в будущем
+# стоит добавить MultiplayerSynchronizer.set_visibility_for() по комнате.
 
-const PORT := 7777
-const MAX_PLAYERS := 32
+const SERVER_PORT := 7777
+const MAX_PLAYERS := 128
+const ROOM_ID_CHARS := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" # без 0/O, 1/I — легче продиктовать
+const ROOM_ID_LEN := 5
 
-var players_info: Dictionary = {}   # peer_id -> {name, role}
-var player_nodes: Dictionary = {}   # peer_id -> Node (инстанс Player.tscn)
+signal room_ready(room_id: String)
+signal room_join_failed(reason: String)
+
+var server_address := "77.42.43.16" # выделенный сервер (hetzner_gearstore); переопределяется флагом --server=IP
+
+var players_info: Dictionary = {}   # peer_id -> {name, role} — ростер СВОЕЙ комнаты (актуально на клиенте)
+var player_nodes: Dictionary = {}   # peer_id -> Node (инстанс Player.tscn), общий для всех комнат в этом процессе
+var my_room_id := ""
+
 var _pending_name := "Гость"
+var _pending_mode := ""      # "create" | "join"
+var _pending_room_id := ""
+
+# ---------- Состояние выделенного сервера (актуально только в его процессе) ----------
+class RoomData:
+	var room_id: String
+	var players_info: Dictionary = {}
+	func _init(id: String) -> void:
+		room_id = id
+
+var _rooms: Dictionary = {}      # room_id -> RoomData
+var _peer_room: Dictionary = {}  # peer_id -> room_id
 
 func _ready() -> void:
-	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connected_to_server.connect(_on_connected_ok)
 	multiplayer.connection_failed.connect(_on_connected_fail)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
-	
-func _spawn_via_spawner(id: int) -> void:
-	if not multiplayer.is_server():
-		return
-	var players_root := get_tree().current_scene.get_node("Players")
-	var spawner: MultiplayerSpawner = players_root.get_node("PlayerSpawner")
-	spawner.spawn({"id": id})
 
-func host_game(player_name: String) -> void:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--server="):
+			server_address = arg.substr("--server=".length())
+
+	if OS.get_cmdline_user_args().has("--dedicated-server"):
+		_start_dedicated_server()
+
+func _start_dedicated_server() -> void:
 	var peer := ENetMultiplayerPeer.new()
-	var err := peer.create_server(PORT, MAX_PLAYERS)
+	var err := peer.create_server(SERVER_PORT, MAX_PLAYERS)
 	if err != OK:
-		push_error("Не удалось создать сервер: %s" % err)
+		push_error("Не удалось поднять выделенный сервер: %s" % err)
 		return
 	multiplayer.multiplayer_peer = peer
-	players_info[1] = {"name": player_name, "role": "speaker"}
-	_spawn_via_spawner(1)
+	print("[DedicatedServer] Слушаю порт %d" % SERVER_PORT)
 
-func join_game(address: String, player_name: String) -> void:
-	var peer := ENetMultiplayerPeer.new()
-	var err := peer.create_client(address, PORT)
-	if err != OK:
-		push_error("Не удалось подключиться: %s" % err)
-		return
-	multiplayer.multiplayer_peer = peer
+# ---------------------------------------------------------------------------
+# Клиент: подключение к выделенному серверу и вход в комнату по коду
+# ---------------------------------------------------------------------------
+
+func create_room(player_name: String) -> void:
 	_pending_name = player_name
+	_pending_mode = "create"
+	_connect_to_server()
 
-func _on_peer_connected(_id: int) -> void:
-	pass # ждём, пока клиент сам зарегистрируется (см. _on_connected_ok)
+func join_room(room_id: String, player_name: String) -> void:
+	_pending_name = player_name
+	_pending_mode = "join"
+	_pending_room_id = room_id.strip_edges().to_upper()
+	_connect_to_server()
+
+func _connect_to_server() -> void:
+	var peer := ENetMultiplayerPeer.new()
+	var err := peer.create_client(server_address, SERVER_PORT)
+	if err != OK:
+		push_error("Не удалось подключиться к серверу: %s" % err)
+		return
+	multiplayer.multiplayer_peer = peer
 
 func _on_connected_ok() -> void:
-	var my_id := multiplayer.get_unique_id()
-	rpc_id(1, "_register_player", my_id, _pending_name)
-
-@rpc("any_peer", "reliable")
-func _register_player(id: int, player_name: String) -> void:
-	if not multiplayer.is_server():
-		return
-	players_info[id] = {"name": player_name, "role": "audience"}
-	rpc("_sync_players", players_info)
-	_spawn_via_spawner(id)
-
-@rpc("authority", "reliable")
-func _sync_players(data: Dictionary) -> void:
-	players_info = data
-
-func _on_peer_disconnected(id: int) -> void:
-	players_info.erase(id)
-	if multiplayer.is_server() and player_nodes.has(id):
-		player_nodes[id].queue_free()
-	player_nodes.erase(id)
+	match _pending_mode:
+		"create":
+			rpc_id(1, "_request_create_room", _pending_name)
+		"join":
+			rpc_id(1, "_request_join_room", _pending_room_id, _pending_name)
 
 func _on_connected_fail() -> void:
 	push_error("Подключение не удалось")
@@ -77,20 +104,112 @@ func _on_connected_fail() -> void:
 func _on_server_disconnected() -> void:
 	push_error("Сервер отключился")
 
-# ---------- Голос (тестовый релей поверх ENet, топология звезда) ----------
+# ---------------------------------------------------------------------------
+# Сервер: лобби (создание комнаты / вход по коду)
+# ---------------------------------------------------------------------------
 
-@rpc("any_peer", "call_local", "unreliable_ordered")
+@rpc("any_peer", "reliable")
+func _request_create_room(player_name: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender_id := multiplayer.get_remote_sender_id()
+	var room_id := _generate_room_id()
+	_rooms[room_id] = RoomData.new(room_id)
+	_join_room_internal(room_id, sender_id, player_name)
+
+@rpc("any_peer", "reliable")
+func _request_join_room(room_id: String, player_name: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender_id := multiplayer.get_remote_sender_id()
+	room_id = room_id.strip_edges().to_upper()
+	if not _rooms.has(room_id):
+		rpc_id(sender_id, "_room_join_failed", "Комната не найдена")
+		return
+	_join_room_internal(room_id, sender_id, player_name)
+
+func _join_room_internal(room_id: String, peer_id: int, player_name: String) -> void:
+	var room: RoomData = _rooms[room_id]
+	var role := "speaker" if room.players_info.is_empty() else "audience"
+	room.players_info[peer_id] = {"name": player_name, "role": role}
+	_peer_room[peer_id] = room_id
+	_spawn_via_spawner(peer_id)
+	for pid in room.players_info.keys():
+		rpc_id(pid, "_room_state", room_id, room.players_info)
+	if role == "speaker":
+		TurnManager.start_match(room_id, peer_id)
+
+func _generate_room_id() -> String:
+	var id := ""
+	for i in ROOM_ID_LEN:
+		id += ROOM_ID_CHARS[randi() % ROOM_ID_CHARS.length()]
+	return id if not _rooms.has(id) else _generate_room_id()
+
+func room_of_peer(peer_id: int) -> String:
+	return _peer_room.get(peer_id, "")
+
+func room_peer_ids(room_id: String) -> Array:
+	if not _rooms.has(room_id):
+		return []
+	return _rooms[room_id].players_info.keys()
+
+@rpc("authority", "reliable")
+func _room_state(room_id: String, data: Dictionary) -> void:
+	my_room_id = room_id
+	players_info = data
+	room_ready.emit(room_id)
+
+@rpc("authority", "reliable")
+func _room_join_failed(reason: String) -> void:
+	room_join_failed.emit(reason)
+
+# ---------------------------------------------------------------------------
+# Сервер: спавн игроков (общий MultiplayerSpawner, см. Main.gd/Main.tscn)
+# ---------------------------------------------------------------------------
+
+func _spawn_via_spawner(id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var players_root := get_tree().current_scene.get_node("Players")
+	var spawner: MultiplayerSpawner = players_root.get_node("PlayerSpawner")
+	spawner.spawn({"id": id})
+
+func _on_peer_disconnected(id: int) -> void:
+	if multiplayer.is_server():
+		_server_on_peer_disconnected(id)
+	player_nodes.erase(id)
+
+func _server_on_peer_disconnected(id: int) -> void:
+	if not _peer_room.has(id):
+		return
+	var room_id: String = _peer_room[id]
+	_peer_room.erase(id)
+	if not _rooms.has(room_id):
+		return
+	var room: RoomData = _rooms[room_id]
+	room.players_info.erase(id)
+	if player_nodes.has(id):
+		player_nodes[id].queue_free()
+	if room.players_info.is_empty():
+		_rooms.erase(room_id)
+		TurnManager.cleanup_room(room_id)
+	else:
+		for pid in room.players_info.keys():
+			rpc_id(pid, "_room_state", room_id, room.players_info)
+
+# ---------- Голос (тестовый релей поверх ENet, в пределах одной комнаты) ----------
+
+@rpc("any_peer", "unreliable_ordered")
 func relay_audio(samples: PackedFloat32Array) -> void:
 	if not multiplayer.is_server():
 		return
 	var sender_id := multiplayer.get_remote_sender_id()
-	if sender_id == 0:
-		sender_id = multiplayer.get_unique_id()
-	for peer_id in multiplayer.get_peers():
+	var room_id := room_of_peer(sender_id)
+	if room_id == "" or not _rooms.has(room_id):
+		return
+	for peer_id in _rooms[room_id].players_info.keys():
 		if peer_id != sender_id:
 			_dispatch_audio.rpc_id(peer_id, sender_id, samples)
-	if sender_id != multiplayer.get_unique_id():
-		_play_incoming_local(sender_id, samples)
 
 @rpc("authority", "unreliable_ordered")
 func _dispatch_audio(sender_id: int, samples: PackedFloat32Array) -> void:
