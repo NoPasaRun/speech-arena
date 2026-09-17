@@ -17,6 +17,9 @@ extends Node
 #   turn_id (int), scenario (string), events (JSON-строка
 #   [{"type","object","t"}]), audio (turn.wav, 16-bit PCM mono)
 # Ответ JSON: {transcript, reply_text, action, score_delta, audio_base64 (mp3)}
+# audio_base64 может быть пустым — тогда сервер сам озвучит reply_text
+# через espeak-ng (см. _synthesize_speech), а на выходе отдаст его же
+# клиентам как WAV. Клиент (_bytes_to_audio_stream) понимает и mp3, и WAV.
 
 const BACKEND_URL := "http://127.0.0.1:8000/api/npc_turn"
 const TURN_DURATION_SEC := 30.0
@@ -56,7 +59,7 @@ var _rooms: Dictionary = {}  # room_id -> RoomTurn (актуально толь�
 # комнате регистрируется первый игрок ("speaker").
 # ---------------------------------------------------------------------------
 func start_match(room_id: String, player_id: int) -> void:
-	if not multiplayer.is_server():
+	if not multiplayer.is_server() or _rooms.has(room_id):
 		return
 	var rt := RoomTurn.new()
 	rt.current_player_id = player_id
@@ -203,6 +206,7 @@ func _on_backend_response(result: int, response_code: int, _headers: PackedStrin
 
 	_apply_npc_turn(
 		room_id,
+		parsed.get("transcript", ""),
 		parsed.get("reply_text", ""),
 		parsed.get("action", ""),
 		parsed.get("score_delta", 0),
@@ -211,10 +215,20 @@ func _on_backend_response(result: int, response_code: int, _headers: PackedStrin
 
 func _fallback_npc_turn(room_id: String) -> void:
 	var reply: String = _FALLBACK_REPLIES[randi() % _FALLBACK_REPLIES.size()]
-	_apply_npc_turn(room_id, reply, "idle", 0, "")
+	_apply_npc_turn(room_id, "", reply, "idle", 0, "")
 
-func _apply_npc_turn(room_id: String, reply_text: String, action: String, score_delta: int, audio_base64: String) -> void:
+func _apply_npc_turn(room_id: String, transcript: String, reply_text: String, action: String, score_delta: int, audio_base64: String) -> void:
 	var rt: RoomTurn = _rooms[room_id]
+	print("[Ход %d] Игрок сказал: %s" % [rt.current_turn_id, transcript if transcript != "" else "(речь не распознана)"])
+	if not rt.turn_events.is_empty():
+		print("[Ход %d] Действия игрока: %s" % [rt.current_turn_id, str(rt.turn_events)])
+	if audio_base64.is_empty():
+		# Бэкенд (или fallback-заглушка) не прислал озвучку — синтезируем сами
+		# на сервере, чтобы все клиенты в комнате услышали ОДНУ и ту же
+		# запись, а не каждый свой клиентский TTS вразнобой.
+		var wav_bytes := _synthesize_speech(reply_text)
+		if not wav_bytes.is_empty():
+			audio_base64 = Marshalls.raw_to_base64(wav_bytes)
 	rt.state = State.NPC_TURN
 	rt.total_score += score_delta
 	for pid in NetworkManager.room_peer_ids(room_id):
@@ -229,25 +243,74 @@ func _broadcast_npc_turn(turn_id: int, reply_text: String, action: String, score
 	state = State.NPC_TURN
 	total_score = new_total_score
 	npc_turn_received.emit(turn_id, reply_text, action, score_delta, new_total_score, audio_base64)
-	_play_npc_voice(audio_base64)
+	if audio_base64.is_empty():
+		_speak_npc_text(reply_text)
+	else:
+		_play_npc_voice(audio_base64)
 
 var _npc_voice: AudioStreamPlayer
+
+# Клиентский TTS — последний рубеж на случай, если сервер тоже не смог
+# синтезировать озвучку (например, espeak-ng не установлен на сервере).
+# В обычном случае сервер уже прислал готовый audio_base64, и сюда не
+# заходим — см. _synthesize_speech() и _apply_npc_turn().
+func _speak_npc_text(text: String) -> void:
+	if text.is_empty():
+		return
+	DisplayServer.tts_speak(text, "", 100, 1.0, 1.0, 0, false)
 
 func _play_npc_voice(audio_base64: String) -> void:
 	if audio_base64.is_empty():
 		return
-	var mp3_bytes := Marshalls.base64_to_raw(audio_base64)
-	if mp3_bytes.is_empty():
+	var raw_bytes := Marshalls.base64_to_raw(audio_base64)
+	if raw_bytes.is_empty():
 		push_warning("Не удалось декодировать audio_base64 ответа NPC")
 		return
 	if _npc_voice == null:
 		_npc_voice = AudioStreamPlayer.new()
 		_npc_voice.bus = "Master"
 		add_child(_npc_voice)
-	var stream := AudioStreamMP3.new()
-	stream.data = mp3_bytes
+	var stream := _bytes_to_audio_stream(raw_bytes)
+	if stream == null:
+		return
 	_npc_voice.stream = stream
 	_npc_voice.play()
+
+# Наш собственный синтез (см. _synthesize_speech) присылает WAV; реальный
+# AI-бэкенд по контракту — mp3. Определяем формат по сигнатуре байт, чтобы
+# поддержать оба варианта без отдельного поля в ответе.
+func _bytes_to_audio_stream(raw_bytes: PackedByteArray) -> AudioStream:
+	if raw_bytes.size() > 44 and raw_bytes.slice(0, 4).get_string_from_ascii() == "RIFF":
+		var channels := raw_bytes.decode_u16(22)
+		var sample_rate := raw_bytes.decode_u32(24)
+		var bits := raw_bytes.decode_u16(34)
+		var stream := AudioStreamWAV.new()
+		stream.format = AudioStreamWAV.FORMAT_16_BITS if bits == 16 else AudioStreamWAV.FORMAT_8_BITS
+		stream.mix_rate = sample_rate
+		stream.stereo = channels == 2
+		stream.data = raw_bytes.slice(44)
+		return stream
+	var mp3 := AudioStreamMP3.new()
+	mp3.data = raw_bytes
+	return mp3
+
+# Серверный TTS через espeak-ng (офлайн, без API-ключей). Возвращает пустой
+# массив, если утилита не установлена или упала — тогда _apply_npc_turn
+# оставит audio_base64 пустым и сработает клиентский _speak_npc_text().
+func _synthesize_speech(text: String) -> PackedByteArray:
+	if not multiplayer.is_server() or text.is_empty():
+		return PackedByteArray()
+	var tmp_path := "/tmp/turnmanager_tts_%d.wav" % Time.get_ticks_usec()
+	var args := PackedStringArray(["-v", "ru", "-w", tmp_path, text])
+	var exit_code := OS.execute("espeak-ng", args, [])
+	if exit_code != 0 or not FileAccess.file_exists(tmp_path):
+		push_warning("espeak-ng не смог синтезировать речь (код %s)" % exit_code)
+		return PackedByteArray()
+	var f := FileAccess.open(tmp_path, FileAccess.READ)
+	var bytes := f.get_buffer(f.get_length())
+	f.close()
+	DirAccess.remove_absolute(tmp_path)
+	return bytes
 
 func _broadcast_event(_room_id: String, _action: String) -> void:
 	pass # TODO: применить визуальный эффект события на сцену — ждём

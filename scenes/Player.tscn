@@ -38,3 +38,4 @@ script = ExtResource("2")
 
 [node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="." unique_id=1777387011]
 replication_config = SubResource("SceneReplicationConfig_v6fml")
+public_visibility = false

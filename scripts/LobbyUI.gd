@@ -29,9 +29,8 @@ func _set_busy(text: String) -> void:
 	join_btn.disabled = true
 
 func _on_room_ready(room_id: String) -> void:
-	status_label.text = "Комната: %s" % room_id
-	name_edit.editable = false
-	room_id_edit.editable = false
+	print("Комната: %s" % room_id)
+	hide()
 
 func _on_room_join_failed(reason: String) -> void:
 	status_label.text = "Ошибка: %s" % reason
