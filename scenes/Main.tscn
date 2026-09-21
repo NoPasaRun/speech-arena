@@ -118,5 +118,5 @@ text = "Завершить ход"
 transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, -3)
 script = ExtResource("5_npc")
 
-[node name="Без имени" parent="Npc" unique_id=1272048819 instance=ExtResource("6_c01mt")]
+[node name="woman_model" parent="Npc" unique_id=1272048819 instance=ExtResource("6_c01mt")]
 transform = Transform3D(0.09604621, -0.15817668, 0.9827285, 0.015385969, 0.98741084, 0.15742663, -0.9952579, 9.235834e-10, 0.097270764, -3.7419994, -0.3977762, -2.790722)

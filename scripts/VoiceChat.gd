@@ -56,20 +56,24 @@ func start_capture() -> void:
 func _process(_delta: float) -> void:
 	if not enabled or capture_effect == null:
 		return
-	if capture_effect.get_frames_available() < CHUNK_FRAMES:
+	# Забираем ВСЁ накопленное за кадр, а не один кусок в CHUNK_FRAMES: иначе
+	# при 60 fps читается 256*60 = ~15 тыс. фреймов/с из 48 тыс., остальное
+	# буфер выбрасывает, и в голосе (и в STT) остаются рваные обрывки.
+	var available := capture_effect.get_frames_available()
+	if available < CHUNK_FRAMES:
 		return
-	var stereo_buf := capture_effect.get_buffer(CHUNK_FRAMES)
+	var stereo_buf := capture_effect.get_buffer(available)
 	var mono := PackedFloat32Array()
 	mono.resize(stereo_buf.size())
 	for i in stereo_buf.size():
 		mono[i] = stereo_buf[i].x
 	NetworkManager.relay_audio.rpc_id(1, mono)
-	# Параллельно кормим буфер хода для AI-бэкенда (сервер сам отфильтрует
-	# по current_player_id, если сейчас не мой ход — пакет просто отбросит).
-	# В отличие от relay_audio (unreliable — живой звук, потеря кадра не
-	# страшна), здесь reliable: это идёт в STT, и пропущенный чанк — дыра в
-	# записи и мусор на выходе распознавания, а не лёгкий дребезг в голосе.
-	TurnManager.submit_audio_chunk.rpc_id(1, mono)
+	# Для распознавания речи пишем звук только пока игрок держит микрофон
+	# открытым (кнопка в TurnUI). В отличие от relay_audio (unreliable — живой
+	# звук, потеря кадра не страшна), здесь reliable: это идёт в STT, и
+	# пропущенный чанк — дыра в записи и мусор на выходе распознавания.
+	if TurnManager.mic_open:
+		TurnManager.submit_audio_chunk.rpc_id(1, mono, int(AudioServer.get_mix_rate()))
 
 func play_incoming(samples: PackedFloat32Array) -> void:
 	if playback == null:
