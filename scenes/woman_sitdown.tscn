@@ -1,0 +1,19 @@
+[gd_scene format=3 uid="uid://bj22x2w4q8fr0"]
+
+[ext_resource type="PackedScene" uid="uid://brrcxn21deafs" path="res://models/woman/Без имени.glb" id="1_xr2mc"]
+
+[node name="Без имени" unique_id=1272048819 instance=ExtResource("1_xr2mc")]
+
+[node name="ik_hand_gun" parent="root/ik_hand_root" parent_id_path=PackedInt32Array(1643698621) index="0" unique_id=152165519]
+transform = Transform3D(0.68747425, 0.38722533, 0.614358, 0.5760417, 0.22437844, -0.7860218, -0.44221625, 0.8942656, -0.068803534, -43.291725, 116.66402, 0.34046945)
+
+[node name="Skeleton3D" parent="root" parent_id_path=PackedInt32Array(1652559268) index="2" unique_id=1657027641]
+transform = Transform3D(1, 0, 0, 0, 0.98722166, 0.15935275, 0, -0.15935275, 0.98722166, 0, 0, 0)
+bones/6/rotation = Quaternion(0.158043, 0.39345, 0.014108, 0.570289)
+bones/7/rotation = Quaternion(-0.063889, -0.071454, -0.135862, 0.30108)
+bones/28/rotation = Quaternion(0.158043, 0.393448, -0.025891, 0.64529)
+bones/29/rotation = Quaternion(-0.06389, -0.071454, -0.135863, 0.40108)
+bones/69/rotation = Quaternion(0.073705, -0.062139, 0.786416, 0.995305)
+bones/70/rotation = Quaternion(-0.048884, 0.018864, -0.715522, 0.996474)
+bones/75/rotation = Quaternion(0.06214, 0.073705, 0.995305, -0.596415)
+bones/76/rotation = Quaternion(-0.048884, 0.018867, -0.570522, 0.996474)
