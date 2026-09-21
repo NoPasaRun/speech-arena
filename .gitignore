@@ -1,5 +1,4 @@
 exports
 .git
 .godot
-backend/venv
-backend/__pycache__
+secrets.cfg
