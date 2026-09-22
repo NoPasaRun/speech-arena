@@ -20,15 +20,23 @@ extends Node
 # и сам "призрачный" узел можно только настоящим разделением на per-room
 # MultiplayerAPI/ENet-пир — сознательно не делали, см. обсуждение в чате.
 
+const LocalServer := preload("res://scripts/LocalServer.gd")
+
 const SERVER_PORT := 7777
 const MAX_PLAYERS := 128
+const LOCAL_SERVER_STARTUP_SEC := 30.0 # сколько ждём, пока встроенный сервер загрузит проект
+const IDLE_EXIT_SEC := 10.0            # сервер с --exit-when-idle гаснет, если после ухода последнего клиента никто не вернулся
+const NO_CLIENT_EXIT_SEC := 120.0      # ...или если за это время к нему так никто и не подключился
 const ROOM_ID_CHARS := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" # без 0/O, 1/I — легче продиктовать
 const ROOM_ID_LEN := 5
 
 signal room_ready(room_id: String)
 signal room_join_failed(reason: String)
 
-var server_address := "77.42.43.16" # выделенный сервер (hetzner_gearstore); переопределяется флагом --server=IP
+# По умолчанию игра поднимает свой сервер сама (см. LocalServer.gd) и ходит
+# на него. Флаг --server=IP отправляет клиента на чужой сервер и отключает
+# встроенный.
+var server_address := "127.0.0.1"
 
 var players_info: Dictionary = {}   # peer_id -> {name, role} — ростер СВОЕЙ комнаты (актуально на клиенте)
 var player_nodes: Dictionary = {}   # peer_id -> Node (инстанс Player.tscn), общий для всех комнат в этом процессе
@@ -37,6 +45,11 @@ var my_room_id := ""
 var _pending_name := "Гость"
 var _pending_mode := ""      # "create" | "join"
 var _pending_room_id := ""
+
+var _local_server: LocalServer
+var _local_server_deadline_msec := 0 # до этого момента неудачное подключение считаем "сервер ещё грузится"
+var _bind_ip := ""                   # --bind=IP: слушать только этот адрес (у встроенного сервера — 127.0.0.1)
+var _exit_when_idle := false         # --exit-when-idle: см. _check_idle_exit
 
 # ---------- Состояние выделенного сервера (актуально только в его процессе) ----------
 class RoomData:
@@ -54,21 +67,53 @@ func _ready() -> void:
 	multiplayer.connection_failed.connect(_on_connected_fail)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
 
-	for arg in OS.get_cmdline_user_args():
+	var args := OS.get_cmdline_user_args()
+	var explicit_server := false
+	for arg in args:
 		if arg.begins_with("--server="):
 			server_address = arg.substr("--server=".length())
+			explicit_server = true
+		elif arg.begins_with("--bind="):
+			_bind_ip = arg.substr("--bind=".length())
+	_exit_when_idle = args.has("--exit-when-idle")
 
-	if OS.get_cmdline_user_args().has("--dedicated-server"):
+	if args.has("--dedicated-server"):
 		_start_dedicated_server()
+	elif not explicit_server:
+		_start_local_server()
+
+# Обычный запуск игры: поднимаем сервер сами, дочерним процессом.
+func _start_local_server() -> void:
+	if OS.has_feature("web") or OS.has_feature("mobile"):
+		push_error("На этой платформе встроенный сервер недоступен: укажи внешний флагом --server=IP")
+		return
+	_local_server = LocalServer.new()
+	add_child(_local_server)
+	if _local_server.start():
+		_local_server_deadline_msec = Time.get_ticks_msec() + int(LOCAL_SERVER_STARTUP_SEC * 1000.0)
 
 func _start_dedicated_server() -> void:
 	var peer := ENetMultiplayerPeer.new()
+	if not _bind_ip.is_empty():
+		peer.set_bind_ip(_bind_ip)
 	var err := peer.create_server(SERVER_PORT, MAX_PLAYERS)
 	if err != OK:
-		push_error("Не удалось поднять выделенный сервер: %s" % err)
+		# Чаще всего порт уже занят другим сервером — тогда игра просто
+		# подключится к нему, а этот процесс без сервера смысла не имеет.
+		push_error("Не удалось поднять выделенный сервер на порту %d: %s" % [SERVER_PORT, err])
+		get_tree().quit(1)
 		return
 	multiplayer.multiplayer_peer = peer
-	print("[DedicatedServer] Слушаю порт %d" % SERVER_PORT)
+	print("[DedicatedServer] Слушаю %s:%d" % [_bind_ip if not _bind_ip.is_empty() else "*", SERVER_PORT])
+	if _exit_when_idle:
+		get_tree().create_timer(NO_CLIENT_EXIT_SEC).timeout.connect(_check_idle_exit)
+
+# Встроенный сервер живёт ровно столько, сколько игра: гаснет, если клиентов
+# нет (никто не подключился или последний ушёл и никто не вернулся).
+func _check_idle_exit() -> void:
+	if multiplayer.get_peers().is_empty():
+		print("[DedicatedServer] Клиентов нет, завершаюсь")
+		get_tree().quit()
 
 # ---------------------------------------------------------------------------
 # Клиент: подключение к выделенному серверу и вход в комнату по коду
@@ -101,7 +146,13 @@ func _on_connected_ok() -> void:
 			rpc_id(1, "_request_join_room", _pending_room_id, _pending_name)
 
 func _on_connected_fail() -> void:
+	if Time.get_ticks_msec() < _local_server_deadline_msec:
+		# Встроенный сервер ещё грузит проект (несколько секунд) — пробуем снова.
+		await get_tree().create_timer(1.0).timeout
+		_connect_to_server()
+		return
 	push_error("Подключение не удалось")
+	room_join_failed.emit("не удалось подключиться к серверу")
 
 func _on_server_disconnected() -> void:
 	push_error("Сервер отключился")
@@ -214,6 +265,9 @@ func _spawn_via_spawner(id: int) -> void:
 func _on_peer_disconnected(id: int) -> void:
 	if multiplayer.is_server():
 		_server_on_peer_disconnected(id)
+		if _exit_when_idle:
+			# Решение принимаем не сейчас, а через паузу: вдруг игрок сразу вернулся.
+			get_tree().create_timer(IDLE_EXIT_SEC).timeout.connect(_check_idle_exit)
 	player_nodes.erase(id)
 
 func _server_on_peer_disconnected(id: int) -> void:

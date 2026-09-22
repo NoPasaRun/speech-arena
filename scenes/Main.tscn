@@ -2,13 +2,10 @@
 
 [ext_resource type="Script" uid="uid://00qicrvhwqsp" path="res://scripts/LobbyUI.gd" id="1"]
 [ext_resource type="Script" uid="uid://cabr863mvlvw3" path="res://scripts/Main.gd" id="1_rvslj"]
-[ext_resource type="PackedScene" uid="uid://chwkqxl2i5i14" path="res://models/office_light.glb" id="3_0bbpv"]
+[ext_resource type="PackedScene" uid="uid://blbs4npnf18p2" path="res://models/office/office_mediumlight.glb" id="2_nxtc6"]
 [ext_resource type="Script" uid="uid://cesy0jj2ytdix" path="res://scripts/TurnUI.gd" id="4_turnui"]
 [ext_resource type="Script" uid="uid://cfuquef2j7h4m" path="res://scripts/Npc.gd" id="5_npc"]
-[ext_resource type="PackedScene" uid="uid://c0dpi10l16qf3" path="res://assets/decor/npc_placeholder.glb" id="6_npcmodel"]
-
-[sub_resource type="BoxMesh" id="BoxMesh_floor"]
-size = Vector3(40, 1, 40)
+[ext_resource type="PackedScene" uid="uid://bj22x2w4q8fr0" path="res://scenes/woman_sitdown.tscn" id="6_c01mt"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_floor"]
 size = Vector3(40, 1, 40)
@@ -18,14 +15,17 @@ script = ExtResource("1_rvslj")
 
 [node name="Floor" type="StaticBody3D" parent="." unique_id=750039163]
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="Floor" unique_id=807103799]
-mesh = SubResource("BoxMesh_floor")
-
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Floor" unique_id=1248682979]
 shape = SubResource("BoxShape3D_floor")
 
+[node name="Sketchfab_Scene" parent="Floor" unique_id=1912095435 instance=ExtResource("2_nxtc6")]
+transform = Transform3D(0.03, 0, 0, 0, 0.03, 0, 0, 0, 0.03, 12.819, 4.801, 16.826)
+
+[node name="AreaLight3D" type="AreaLight3D" parent="Floor" unique_id=1321400597]
+transform = Transform3D(0.99993986, 0, 0.010966212, 0, 1, 0, -0.010966212, 0, 0.99993986, 1.6615658, 4.0889397, 0.46178532)
+
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1942327826]
-transform = Transform3D(0.866, -0.433, 0.25, 0, 0.5, 0.866, -0.5, -0.75, 0.433, 0, 10, 0)
+transform = Transform3D(-0.2228568, 0.63508224, -0.7395981, -0.14179872, 0.7294911, 0.6691306, 0.96448326, 0.25399438, -0.07251822, 2.89, 2.65, -0.045)
 
 [node name="Players" type="Node3D" parent="." unique_id=1936547460]
 
@@ -114,12 +114,9 @@ layout_mode = 2
 disabled = true
 text = "Завершить ход"
 
-[node name="office_light" parent="." unique_id=835364470 instance=ExtResource("3_0bbpv")]
-visible = false
-
 [node name="Npc" type="Node3D" parent="." unique_id=700000001]
 transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, -3)
 script = ExtResource("5_npc")
 
-[node name="Model" parent="Npc" unique_id=700000002 instance=ExtResource("6_npcmodel")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.65399635, 0)
+[node name="woman_model" parent="Npc" unique_id=1272048819 instance=ExtResource("6_c01mt")]
+transform = Transform3D(0.09604621, -0.15817668, 0.9827285, 0.015385969, 0.98741084, 0.15742663, -0.9952579, 9.235834e-10, 0.097270764, -3.7419994, -0.3977762, -2.790722)
