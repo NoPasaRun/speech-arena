@@ -1,0 +1,2 @@
+{"prompt_id": "gen_15_neutral_utility", "rep": 0, "failure_class": "unparseable_output", "attempt": 1, "detail": "не удалось разобрать ответ модели: ''", "model": "claude-sonnet-5", "usage": {"input_tokens": 641, "output_tokens": 300}}
+{"prompt_id": "gen_12_universal_fail_sanguine", "rep": 1, "failure_class": "unparseable_output", "attempt": 1, "detail": "не удалось разобрать ответ модели: ''", "model": "claude-sonnet-5", "usage": {"input_tokens": 698, "output_tokens": 300}}

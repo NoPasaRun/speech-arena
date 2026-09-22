@@ -1,0 +1,11 @@
+{
+  "metrics": [
+    {"id": "delta_ok", "label": "Δ±1", "kind": "binary"},
+    {"id": "ends_ok", "label": "ends_scene", "kind": "binary"},
+    {"id": "delta_err", "label": "|Δerr|", "kind": "float", "scale": 6, "better": "lower"}
+  ],
+  "perf_fields": [
+    {"id": "latency_s", "label": "latency", "unit": "s"},
+    {"id": "attempts", "label": "attempts"}
+  ]
+}

@@ -1,0 +1,303 @@
+[
+  {
+    "id": "seed_A1",
+    "tags": ["seed", "sanguine_phlegmatic"],
+    "npc_psychotype": {"sanguine": 3, "choleric": 0, "phlegmatic": 1, "melancholic": 0},
+    "environment": ["ресторан", "NPC сидит одна за столиком", "листает TikTok в телефоне"],
+    "prior_exchange": [],
+    "player_actions": ["подходит и держит дистанцию ~1.5 метра"],
+    "player_line": "Не против если я подсяду?",
+    "expected_rapport_delta": 1,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "seed_A3",
+    "tags": ["seed", "sanguine_phlegmatic"],
+    "npc_psychotype": {"sanguine": 3, "choleric": 0, "phlegmatic": 1, "melancholic": 0},
+    "environment": ["ресторан", "NPC сидит одна за столиком"],
+    "prior_exchange": [
+      {"speaker": "player", "text": "Не против если я подсяду?"},
+      {"speaker": "npc", "text": "Вам что-то нужно?"}
+    ],
+    "player_actions": [],
+    "player_line": "У меня были какие-то неотложные дела, но я понял, что не могу пройти мимо вас. Вы не против если я вас угощу чашкой кофе?",
+    "expected_rapport_delta": 2,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "seed_A5",
+    "tags": ["seed", "sanguine_phlegmatic"],
+    "npc_psychotype": {"sanguine": 3, "choleric": 0, "phlegmatic": 1, "melancholic": 0},
+    "environment": ["ресторан", "NPC сидит одна за столиком"],
+    "prior_exchange": [
+      {"speaker": "player", "text": "Не против если я подсяду?"},
+      {"speaker": "npc", "text": "Вам что-то нужно?"},
+      {"speaker": "player", "text": "У меня были какие-то неотложные дела, но я понял, что не могу пройти мимо вас. Вы не против если я вас угощу чашкой кофе?"},
+      {"speaker": "npc", "text": "Ну если кофе то пойдёт, у меня так-то и у самой дела."}
+    ],
+    "player_actions": ["сближается"],
+    "player_line": "Думаю я у вас много времени не займу. Меня кстати Вова зовут, а вас?",
+    "expected_rapport_delta": 2,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "seed_B",
+    "tags": ["seed", "sanguine_phlegmatic", "mismatch"],
+    "npc_psychotype": {"sanguine": 3, "choleric": 0, "phlegmatic": 1, "melancholic": 0},
+    "environment": ["ресторан", "NPC сидит одна за столиком", "листает TikTok в телефоне"],
+    "prior_exchange": [],
+    "player_actions": ["подходит и держит дистанцию 3-4 метра"],
+    "player_line": "Не против если я подсяду?",
+    "expected_rapport_delta": -2,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "seed_C",
+    "tags": ["seed", "sanguine_phlegmatic", "universal_fail"],
+    "npc_psychotype": {"sanguine": 3, "choleric": 0, "phlegmatic": 1, "melancholic": 0},
+    "environment": ["ресторан", "NPC сидит одна за столиком", "листает TikTok в телефоне"],
+    "prior_exchange": [
+      {"speaker": "player", "text": "Не против если я подсяду?"},
+      {"speaker": "npc", "text": "(не обращает внимания)"}
+    ],
+    "player_actions": ["держит дистанцию 3-4 метра, настаивает"],
+    "player_line": "Не против если я подсяду?",
+    "expected_rapport_delta": -3,
+    "expected_ends_scene": true
+  },
+  {
+    "id": "gen_01_choleric_match",
+    "tags": ["match", "choleric"],
+    "npc_psychotype": {"sanguine": 1, "choleric": 3, "phlegmatic": 0, "melancholic": 0},
+    "environment": ["бар", "NPC уверенно потягивает коктейль", "оглядывает зал"],
+    "prior_exchange": [],
+    "player_actions": ["подходит уверенно, садится без разрешения"],
+    "player_line": "Ты явно самая интересная тут. Я Игорь, а ты?",
+    "expected_rapport_delta": 2,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_02_melancholic_match",
+    "tags": ["match", "melancholic"],
+    "npc_psychotype": {"sanguine": 0, "choleric": 0, "phlegmatic": 1, "melancholic": 3},
+    "environment": ["кафе", "NPC одна читает книгу", "за окном дождь"],
+    "prior_exchange": [],
+    "player_actions": ["подсаживается не сразу, выжидает паузу"],
+    "player_line": "Извините, не хотел мешать — просто заметил, что читаете эту книгу, тоже её обожаю. Какой момент зацепил больше всего?",
+    "expected_rapport_delta": 3,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_03_phlegmatic_match",
+    "tags": ["match", "phlegmatic"],
+    "npc_psychotype": {"sanguine": 0, "choleric": 0, "phlegmatic": 3, "melancholic": 1},
+    "environment": ["тихий парк", "NPC кормит голубей на лавочке"],
+    "prior_exchange": [],
+    "player_actions": ["садится на безопасном расстоянии, не спешит"],
+    "player_line": "Тут очень спокойно, да? Не против если я просто немного посижу рядом, не буду мешать.",
+    "expected_rapport_delta": 2,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_04_sanguine_match",
+    "tags": ["match", "sanguine"],
+    "npc_psychotype": {"sanguine": 3, "choleric": 1, "phlegmatic": 0, "melancholic": 0},
+    "environment": ["вечеринка", "NPC танцует и смеётся с подругами"],
+    "prior_exchange": [],
+    "player_actions": ["подходит с улыбкой, лёгкая жестикуляция"],
+    "player_line": "Так, минуточку — вы явно веселитесь тут больше всех, научите меня этому танцу!",
+    "expected_rapport_delta": 3,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_05_choleric_mismatch",
+    "tags": ["mismatch", "choleric"],
+    "npc_psychotype": {"sanguine": 1, "choleric": 3, "phlegmatic": 0, "melancholic": 0},
+    "environment": ["бар", "NPC уверенно потягивает коктейль", "оглядывает зал"],
+    "prior_exchange": [],
+    "player_actions": ["садится робко, спрашивает разрешения трижды"],
+    "player_line": "Извините, если что не так, я сразу уйду... можно, если вам не сложно, с вами посидеть, если вы не против конечно...",
+    "expected_rapport_delta": -2,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_06_melancholic_mismatch",
+    "tags": ["mismatch", "melancholic"],
+    "npc_psychotype": {"sanguine": 0, "choleric": 0, "phlegmatic": 1, "melancholic": 3},
+    "environment": ["кафе", "NPC одна читает книгу", "за окном дождь"],
+    "prior_exchange": [],
+    "player_actions": ["садится резко, сразу громко шутит"],
+    "player_line": "Эй, красотка, что за скучная книжка, пошли лучше выпьем, жизнь одна!",
+    "expected_rapport_delta": -3,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_07_phlegmatic_mismatch",
+    "tags": ["mismatch", "phlegmatic"],
+    "npc_psychotype": {"sanguine": 0, "choleric": 0, "phlegmatic": 3, "melancholic": 1},
+    "environment": ["тихий парк", "NPC кормит голубей на лавочке"],
+    "prior_exchange": [],
+    "player_actions": ["резко садится вплотную, сразу засыпает вопросами"],
+    "player_line": "Привет! Как тебя зовут, что делаешь сегодня вечером, дай телефон, пойдём куда-нибудь прямо сейчас?",
+    "expected_rapport_delta": -3,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_08_sanguine_mismatch",
+    "tags": ["mismatch", "sanguine"],
+    "npc_psychotype": {"sanguine": 3, "choleric": 1, "phlegmatic": 0, "melancholic": 0},
+    "environment": ["вечеринка", "NPC танцует и смеётся с подругами"],
+    "prior_exchange": [],
+    "player_actions": ["подходит скованно, стоит поодаль, не танцует"],
+    "player_line": "Извините за беспокойство, ничего, если я спрошу, как вас зовут, если у вас есть свободная минутка?",
+    "expected_rapport_delta": -2,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_09_mixed_sanguine_melancholic",
+    "tags": ["mixed", "sanguine_melancholic"],
+    "npc_psychotype": {"sanguine": 2, "choleric": 0, "phlegmatic": 0, "melancholic": 2},
+    "environment": ["кафе-книжный клуб", "NPC читает и пишет в блокноте", "улыбается своим мыслям"],
+    "prior_exchange": [],
+    "player_actions": ["подходит с лёгкой улыбкой, держит небольшую дистанцию"],
+    "player_line": "Судя по улыбке, там либо отличная книга, либо секрет — можно узнать, какой из вариантов?",
+    "expected_rapport_delta": 2,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_10_mixed_choleric_phlegmatic",
+    "tags": ["mixed", "choleric_phlegmatic"],
+    "npc_psychotype": {"sanguine": 0, "choleric": 2, "phlegmatic": 2, "melancholic": 0},
+    "environment": ["спортзал", "NPC отдыхает после тренировки, пьёт воду"],
+    "prior_exchange": [],
+    "player_actions": ["подходит спокойно, не сразу заговаривает, ждёт паузу"],
+    "player_line": "Впечатляющий подход, кстати. Не хочу мешать отдыху — просто было интересно узнать твоё имя.",
+    "expected_rapport_delta": 2,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_11_mixed_balanced_neutral",
+    "tags": ["neutral", "balanced"],
+    "npc_psychotype": {"sanguine": 1, "choleric": 1, "phlegmatic": 1, "melancholic": 1},
+    "environment": ["очередь в кофейне"],
+    "prior_exchange": [],
+    "player_actions": ["обычный нейтральный подход"],
+    "player_line": "Какая тут длинная очередь, да?",
+    "expected_rapport_delta": 0,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_12_universal_fail_sanguine",
+    "tags": ["universal_fail", "sanguine"],
+    "npc_psychotype": {"sanguine": 3, "choleric": 0, "phlegmatic": 0, "melancholic": 0},
+    "environment": ["бар", "шумно"],
+    "prior_exchange": [],
+    "player_actions": ["трогает руку без разрешения, придвигается вплотную"],
+    "player_line": "Слушай, а фигура у тебя вообще огонь, пошли куда-нибудь потише.",
+    "expected_rapport_delta": -3,
+    "expected_ends_scene": true
+  },
+  {
+    "id": "gen_13_universal_fail_choleric_melancholic",
+    "tags": ["universal_fail", "choleric_melancholic"],
+    "npc_psychotype": {"sanguine": 0, "choleric": 2, "phlegmatic": 0, "melancholic": 2},
+    "environment": ["коворкинг", "NPC работает за ноутбуком"],
+    "prior_exchange": [
+      {"speaker": "npc", "text": "Вы тоже здесь работаете?"}
+    ],
+    "player_actions": ["уличена в очевидной лжи прямо на месте"],
+    "player_line": "Да, я тоже тут работаю (NPC точно видит, что это неправда — у игрока нет пропуска и бейджа коворкинга)",
+    "expected_rapport_delta": -3,
+    "expected_ends_scene": true
+  },
+  {
+    "id": "gen_14_universal_fail_phlegmatic",
+    "tags": ["universal_fail", "phlegmatic"],
+    "npc_psychotype": {"sanguine": 0, "choleric": 0, "phlegmatic": 3, "melancholic": 0},
+    "environment": ["тихая библиотека", "много людей вокруг читают"],
+    "prior_exchange": [],
+    "player_actions": ["кричит через весь зал, привлекая внимание всех"],
+    "player_line": "ЭЙ! ДЕВУШКА В КРАСНОМ, Я С ТОБОЙ ГОВОРЮ, ОБЕРНИСЬ!",
+    "expected_rapport_delta": -3,
+    "expected_ends_scene": true
+  },
+  {
+    "id": "gen_15_neutral_utility",
+    "tags": ["neutral", "melancholic_sanguine"],
+    "npc_psychotype": {"sanguine": 1, "choleric": 0, "phlegmatic": 0, "melancholic": 2},
+    "environment": ["кафе"],
+    "prior_exchange": [],
+    "player_actions": [],
+    "player_line": "Тут вайфай есть?",
+    "expected_rapport_delta": 0,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_16_neutral_utility_2",
+    "tags": ["neutral", "choleric_sanguine"],
+    "npc_psychotype": {"sanguine": 2, "choleric": 2, "phlegmatic": 0, "melancholic": 0},
+    "environment": ["ресторан"],
+    "prior_exchange": [],
+    "player_actions": [],
+    "player_line": "Извините, вы не видели тут официанта?",
+    "expected_rapport_delta": 0,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_17_trap_choleric_politeness",
+    "tags": ["trap", "choleric"],
+    "npc_psychotype": {"sanguine": 0, "choleric": 3, "phlegmatic": 0, "melancholic": 0},
+    "environment": ["бар"],
+    "prior_exchange": [
+      {"speaker": "npc", "text": "(коротко кивает и отворачивается)"}
+    ],
+    "player_actions": [],
+    "player_line": "Ничего страшного, если не хотите общаться, я пойму, не буду настаивать.",
+    "expected_rapport_delta": -1,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_18_trap_sanguine_monologue",
+    "tags": ["trap", "sanguine"],
+    "npc_psychotype": {"sanguine": 3, "choleric": 0, "phlegmatic": 0, "melancholic": 0},
+    "environment": ["вечеринка"],
+    "prior_exchange": [],
+    "player_actions": ["говорит долго и монотонно, ни разу не улыбается и не шутит"],
+    "player_line": "Ну вот, я работаю в логистике, у нас там сложная система учёта, недавно как раз внедряли новый софт, это заняло примерно три месяца, а до этого я работал в другой компании...",
+    "expected_rapport_delta": -2,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_19_context_ignores_hurry",
+    "tags": ["context", "phlegmatic"],
+    "npc_psychotype": {"sanguine": 0, "choleric": 0, "phlegmatic": 3, "melancholic": 0},
+    "environment": ["ресторан", "NPC явно спешит, смотрит на часы, собирает вещи"],
+    "prior_exchange": [],
+    "player_actions": ["садится и начинает длинный неспешный разговор, игнорируя явные сигналы спешки"],
+    "player_line": "Слушай, а давай я тебе всё же расскажу с самого начала, это не быстро, но интересно...",
+    "expected_rapport_delta": -2,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_20_context_reads_distress",
+    "tags": ["context", "melancholic"],
+    "npc_psychotype": {"sanguine": 0, "choleric": 0, "phlegmatic": 0, "melancholic": 3},
+    "environment": ["кафе", "NPC явно расстроена, видны следы слёз, смотрит в одну точку"],
+    "prior_exchange": [],
+    "player_actions": ["подходит бережно, садится на расстоянии, говорит тихо"],
+    "player_line": "Не хочу лезть — просто вижу, что тебе сейчас непросто. Если захочешь просто помолчать вдвоём — я рядом, без вопросов.",
+    "expected_rapport_delta": 3,
+    "expected_ends_scene": false
+  },
+  {
+    "id": "gen_21_universal_fail_melancholic",
+    "tags": ["universal_fail", "melancholic"],
+    "npc_psychotype": {"sanguine": 0, "choleric": 0, "phlegmatic": 0, "melancholic": 3},
+    "environment": ["тихая арт-выставка", "NPC явно любуется одной картиной"],
+    "prior_exchange": [],
+    "player_actions": ["не спрашивает разрешения, громко критикует картину прямо при ней"],
+    "player_line": "Фу, это же примитивная мазня, не понимаю кто это вообще купит.",
+    "expected_rapport_delta": -3,
+    "expected_ends_scene": true
+  }
+]

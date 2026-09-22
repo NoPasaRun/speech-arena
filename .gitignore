@@ -5,3 +5,6 @@ secrets.cfg
 backend/venv
 backend/__pycache__
 .idea
+.claude/hillclimb/**/traces/
+.claude/hillclimb/**/report.html
+.claude/hillclimb/**/trajectory/
