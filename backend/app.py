@@ -32,7 +32,9 @@ from fastapi.responses import JSONResponse
 # Все SDK/запросы подхватывают ключи из окружения сами, в коде ничего не
 # хардкодится.
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 LLM_MODEL = "claude-haiku-4-5"
 LLM_TIMEOUT_SEC = 90.0
@@ -247,6 +249,7 @@ async def npc_turn(
 ):
     audio_bytes = await audio.read()
     transcript = await _transcribe(audio_bytes)
+    logger.info("[ход %d] игрок (распознано STT): %s", turn_id, transcript or "(тишина/не распознано)")
 
     try:
         events_list = json.loads(events)
@@ -269,8 +272,14 @@ async def npc_turn(
         logger.error("Неожиданная ошибка при обращении к LLM: %s", exc)
         raise HTTPException(status_code=502, detail=f"LLM: непредвиденная ошибка: {exc}")
 
+    logger.info(
+        "[ход %d] NPC: %s (actions=%s, score_delta=%d)",
+        turn_id, npc["reply_text"], npc["actions"], npc["score_delta"],
+    )
+
     tts_bytes = await _synthesize_speech(npc["reply_text"])
     audio_base64 = base64.b64encode(tts_bytes).decode("ascii") if tts_bytes else ""
+    logger.info("[ход %d] озвучка NPC: %s", turn_id, f"{len(tts_bytes)} байт mp3" if tts_bytes else "не удалась (пусто)")
 
     return JSONResponse({
         "transcript": transcript,
