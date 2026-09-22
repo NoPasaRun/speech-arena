@@ -1,10 +1,8 @@
 extends Node
 
 # Синглтон (автозагрузка). Серверная машина состояний хода тестовой сессии
-# "свиданка": ждёт речь+действия игрока в течение хода, в конце хода шлёт
-# накопленное на AI-бэкенд (FastAPI, ещё не написан) и рассылает клиентам
-# ответ NPC. Если бэкенд недоступен — использует захардкоженный fallback,
-# чтобы демо не падало без интернета.
+# "свиданка": ждёт речь+действия игрока в течение хода, в конце хода гонит
+# накопленное через цепочку AiBackend и рассылает клиентам ответ NPC.
 #
 # Один и тот же автозагружаемый узел обслуживает ВСЕ комнаты выделенного
 # сервера одновременно: состояние (счёт, текущий ход, таймер) хранится не в
@@ -13,43 +11,54 @@ extends Node
 # используются поля state/total_score напрямую — там всегда только "своя"
 # комната.
 #
-# Контракт бэкенда: POST BACKEND_URL, multipart/form-data:
-#   turn_id (int), scenario (string), events (JSON-строка
-#   [{"type","object","t"}]), audio (turn.wav, 16-bit PCM mono)
-# Ответ JSON: {transcript, reply_text, actions (массив строк из словаря
-#              "talk"/"turn"/"nod"/"shrug"/"idle", см. Npc.gd), score_delta,
-#              audio_base64 (mp3), time (сек, опционально)}
-# audio_base64 в норме уже озвучен бэкендом (Yandex SpeechKit, см.
-# backend/app.py). Пустым он приходит только если TTS на бэкенде не
-# получился (нет ключей/сеть упала) — тогда сервер синтезирует речь сам
-# через espeak-ng (см. _synthesize_speech), а если и это не выйдет —
-# клиент озвучит текст локально (_speak_npc_text). Клиент
-# (_bytes_to_audio_stream) понимает и mp3, и WAV.
-# time — сколько длится реплика NPC; на это время сервер задерживает старт
-# следующего хода игрока (_on_npc_wait_timeout), чтобы таймер игрока не тикал,
-# пока NPC ещё "говорит". Если бэкенд его не прислал (или прислал 0/пусто),
-# сервер сам оценивает длительность по audio_base64, а если и это не вышло —
-# по длине текста (см. _estimate_npc_duration).
+# Ввод реплики игрока — два равноправных способа, итог всегда текст:
+#   - голос (диктовка): пока микрофон открыт (begin_dictation), клиент шлёт
+#     аудио (submit_audio_chunk), а сервер каждые LIVE_STT_INTERVAL_SEC
+#     заново распознаёт накопленное в Яндекс STT и присылает клиенту текущий
+#     текст (dictation_result); после end_dictation приходит итоговый. Настоящего
+#     потока нет: потоковый STT Яндекса — gRPC, из GDScript недоступен.
+#     Игрок правит текст, как хочет, и отправляет.
+#   - клавиатура: игрок просто печатает текст и отправляет.
+# Отправка — submit_text(text), дальше _send_turn_to_backend, два шага в
+# AiBackend.gd:
+#   1. Claude Haiku: текст + события + история комнаты -> reply_text,
+#      actions (словарь "talk"/"turn"/"nod"/"shrug"/"idle", см. Npc.gd),
+#      score_delta
+#   2. Яндекс TTS (голос alena): reply_text -> mp3 (audio_base64)
+# Запасных вариантов нет (ни заготовленных реплик, ни другого голоса):
+# AiBackend сам повторяет запросы при временных сбоях, а если шаг всё равно
+# не удался — _fail_turn честно сообщает клиентам об ошибке (turn_failed) и
+# через FAIL_PAUSE_SEC даёт игроку повторить ход. Пустая реплика (игрок
+# промолчал до конца таймера) — не сбой: NPC просто отвечает, что не расслышал.
+#
+# Длительность реплики NPC берётся из самого mp3: на это время сервер
+# задерживает старт следующего хода игрока (_on_npc_wait_timeout), чтобы
+# таймер игрока не тикал, пока NPC ещё "говорит".
 
-const BACKEND_URL := "http://127.0.0.1:8000/api/npc_turn"
+const AiBackend := preload("res://scripts/AiBackend.gd")
+
 const TURN_DURATION_SEC := 30.0
-const REQUEST_TIMEOUT_SEC := 100.0 # LLM на бэкенде медленный (десятки секунд на реплику)
+# Клиент сам отправляет то, что успел набрать, когда его отсчёт дошёл до нуля;
+# серверный таймер чуть длиннее, чтобы эта отправка успела дойти.
+const TURN_GRACE_SEC := 2.0
+const FAIL_PAUSE_SEC := 3.0 # сколько игрок видит ошибку, прежде чем начнётся повторный ход
+const LIVE_STT_INTERVAL_SEC := 1.5 # как часто обновляется текст во время диктовки
+const MAX_TEXT_CHARS := 500
 
 enum State { IDLE, PLAYER_TURN, PROCESSING, NPC_TURN }
 
 signal turn_started(turn_id: int, duration_sec: float)
 signal processing_started()
+signal turn_failed(reason: String)
+# Текст диктовки: is_final == false — промежуточный (запись идёт), true —
+# итоговый после закрытия микрофона; ok == false — распознать не удалось.
+signal dictation_result(text: String, is_final: bool, ok: bool)
 signal npc_turn_received(turn_id: int, transcript: String, reply_text: String, actions: PackedStringArray, score_delta: int, total_score: int, audio_base64: String)
 
 # ---- клиентское состояние (только "своя" комната) ----
 var state: State = State.IDLE
 var total_score := 0
-
-const _FALLBACK_REPLIES := [
-	"Извини, я немного отвлеклась... Повтори, пожалуйста?",
-	"Хм, дай мне подумать секунду.",
-	"Здесь так шумно, я не совсем расслышала.",
-]
+var mic_open := false # клиент: микрофон открыт для диктовки (VoiceChat шлёт аудио только тогда)
 
 class RoomTurn:
 	var state: int = 0 # State.IDLE
@@ -60,11 +69,26 @@ class RoomTurn:
 	var turn_events: Array = []
 	var turn_start_ticks_msec := 0
 	var audio_buffer: PackedFloat32Array = PackedFloat32Array()
+	var audio_rate := 0 # частота, с которой клиент записал audio_buffer (шлёт вместе с чанками)
+	var dictating := false     # микрофон игрока открыт, аудио копится в audio_buffer
+	var stt_busy := false      # промежуточное распознавание уже идёт — следующее не запускаем
+	var stt_gen := 0           # номер последнего запущенного распознавания: устаревшие ответы отбрасываем
+	var stt_last_size := 0     # сколько сэмплов было в буфере при последнем запуске
+	var submitted_text := ""   # реплика игрока, отправленная в этот ход
+	var history: Array = [] # переписка {role, content} для Claude, пополняется через AiBackend.remember
 	var timer: Timer
 	var npc_wait_timer: Timer
-	var http: HTTPRequest
+	var live_timer: Timer      # тик промежуточного распознавания во время диктовки
 
 var _rooms: Dictionary = {}  # room_id -> RoomTurn (актуально только на выделенном сервере)
+var _ai: AiBackend
+
+func _ready() -> void:
+	# Внешние API нужны только процессу, который ведёт ходы. Клиентам ключи
+	# не нужны — иначе каждый клиент ругался бы на их отсутствие.
+	if OS.get_cmdline_user_args().has("--dedicated-server"):
+		_ai = AiBackend.new()
+		add_child(_ai)
 
 # ---------------------------------------------------------------------------
 # Запуск сессии в комнате. Вызывает NetworkManager на сервере, когда в
@@ -83,10 +107,9 @@ func start_match(room_id: String, player_id: int) -> void:
 	rt.npc_wait_timer.one_shot = true
 	rt.npc_wait_timer.timeout.connect(_on_npc_wait_timeout.bind(room_id))
 	add_child(rt.npc_wait_timer)
-	rt.http = HTTPRequest.new()
-	rt.http.timeout = REQUEST_TIMEOUT_SEC
-	add_child(rt.http)
-	rt.http.request_completed.connect(_on_backend_response.bind(room_id))
+	rt.live_timer = Timer.new()
+	rt.live_timer.timeout.connect(_on_live_timer.bind(room_id))
+	add_child(rt.live_timer)
 	_rooms[room_id] = rt
 	_start_player_turn(room_id)
 
@@ -96,7 +119,7 @@ func cleanup_room(room_id: String) -> void:
 	var rt: RoomTurn = _rooms[room_id]
 	rt.timer.queue_free()
 	rt.npc_wait_timer.queue_free()
-	rt.http.queue_free()
+	rt.live_timer.queue_free()
 	_rooms.erase(room_id)
 
 func _start_player_turn(room_id: String) -> void:
@@ -105,14 +128,21 @@ func _start_player_turn(room_id: String) -> void:
 	rt.state = State.PLAYER_TURN
 	rt.turn_events.clear()
 	rt.audio_buffer.resize(0)
+	rt.audio_rate = 0
+	rt.dictating = false
+	rt.stt_busy = false
+	rt.stt_last_size = 0
+	rt.submitted_text = ""
+	rt.live_timer.stop()
 	rt.turn_start_ticks_msec = Time.get_ticks_msec()
-	rt.timer.start(TURN_DURATION_SEC)
+	rt.timer.start(TURN_DURATION_SEC + TURN_GRACE_SEC)
 	for pid in NetworkManager.room_peer_ids(room_id):
 		_on_turn_started.rpc_id(pid, rt.current_turn_id, TURN_DURATION_SEC)
 
 @rpc("authority", "reliable")
 func _on_turn_started(turn_id: int, duration_sec: float) -> void:
 	state = State.PLAYER_TURN
+	mic_open = false
 	turn_started.emit(turn_id, duration_sec)
 
 # ---------------------------------------------------------------------------
@@ -120,16 +150,20 @@ func _on_turn_started(turn_id: int, duration_sec: float) -> void:
 # ---------------------------------------------------------------------------
 
 @rpc("any_peer", "reliable")
-func submit_audio_chunk(samples: PackedFloat32Array) -> void:
-	if not multiplayer.is_server():
+func submit_audio_chunk(samples: PackedFloat32Array, sample_rate: int) -> void:
+	# sample_rate — частота дискретизации микрофона на клиенте (у клиента и
+	# у сервера AudioServer.get_mix_rate() может отличаться, а STT нужна
+	# именно частота записи).
+	if not multiplayer.is_server() or sample_rate < 8000 or sample_rate > 192000:
 		return
 	var sender_id := multiplayer.get_remote_sender_id()
 	var room_id := NetworkManager.room_of_peer(sender_id)
 	if room_id == "" or not _rooms.has(room_id):
 		return
 	var rt: RoomTurn = _rooms[room_id]
-	if rt.state != State.PLAYER_TURN or sender_id != rt.current_player_id:
+	if rt.state != State.PLAYER_TURN or sender_id != rt.current_player_id or not rt.dictating:
 		return
+	rt.audio_rate = sample_rate
 	rt.audio_buffer.append_array(samples)
 
 # Дискретное событие сцены (взял бокал, подвинул меню и т.п.). Вызывать
@@ -143,29 +177,123 @@ func log_event(room_id: String, event_type: String, object_name: String) -> void
 	var t := (Time.get_ticks_msec() - rt.turn_start_ticks_msec) / 1000.0
 	rt.turn_events.append({"type": event_type, "object": object_name, "t": t})
 
-# Игрок жмёт "Завершить ход" в UI: TurnManager.request_end_turn.rpc_id(1)
-@rpc("any_peer", "reliable")
-func request_end_turn() -> void:
+# ---------------------------------------------------------------------------
+# Клиентский API ввода (его дёргает TurnUI)
+# ---------------------------------------------------------------------------
+
+# Открыть микрофон: сервер начнёт копить аудио и присылать текст диктовки.
+func begin_dictation() -> void:
+	mic_open = true
+	request_dictation_start.rpc_id(1)
+
+# Закрыть микрофон: сервер пришлёт итоговый текст (dictation_result, is_final).
+func end_dictation() -> void:
+	mic_open = false
+	request_dictation_stop.rpc_id(1)
+
+# Отправить реплику (набранную или продиктованную и поправленную) — конец хода игрока.
+func submit_text(text: String) -> void:
+	mic_open = false
+	submit_text_turn.rpc_id(1, text)
+
+# ---------------------------------------------------------------------------
+# Серверная часть ввода
+# ---------------------------------------------------------------------------
+
+# Комната отправителя RPC, если он сейчас говорящий игрок в фазе своего хода;
+# иначе "". Вызывать только прямо из тела RPC (нужен get_remote_sender_id).
+func _speaker_room_id() -> String:
 	if not multiplayer.is_server():
-		return
+		return ""
 	var sender_id := multiplayer.get_remote_sender_id()
 	var room_id := NetworkManager.room_of_peer(sender_id)
 	if room_id == "" or not _rooms.has(room_id):
-		return
+		return ""
 	var rt: RoomTurn = _rooms[room_id]
 	if rt.state != State.PLAYER_TURN or sender_id != rt.current_player_id:
+		return ""
+	return room_id
+
+@rpc("any_peer", "reliable")
+func request_dictation_start() -> void:
+	var room_id := _speaker_room_id()
+	if room_id == "":
 		return
-	_end_player_turn(room_id)
+	var rt: RoomTurn = _rooms[room_id]
+	rt.audio_buffer.resize(0) # каждая запись — с чистого листа
+	rt.audio_rate = 0
+	rt.stt_last_size = 0
+	rt.dictating = true
+	rt.live_timer.start(LIVE_STT_INTERVAL_SEC)
+
+@rpc("any_peer", "reliable")
+func request_dictation_stop() -> void:
+	var room_id := _speaker_room_id()
+	if room_id == "":
+		return
+	var rt: RoomTurn = _rooms[room_id]
+	if not rt.dictating:
+		return
+	rt.dictating = false
+	rt.live_timer.stop()
+	_run_dictation_stt(room_id, true)
+
+@rpc("any_peer", "reliable")
+func submit_text_turn(text: String) -> void:
+	var room_id := _speaker_room_id()
+	if room_id == "":
+		return
+	_end_player_turn(room_id, text.strip_edges().left(MAX_TEXT_CHARS))
+
+func _on_live_timer(room_id: String) -> void:
+	if not _rooms.has(room_id):
+		return
+	var rt: RoomTurn = _rooms[room_id]
+	# Пока прошлое распознавание не вернулось (или звука не прибавилось) — ждём.
+	if not rt.dictating or rt.stt_busy or rt.audio_buffer.size() == rt.stt_last_size:
+		return
+	_run_dictation_stt(room_id, false)
+
+# Распознаёт всё, что накопилось в буфере записи, и шлёт текст говорящему.
+func _run_dictation_stt(room_id: String, is_final: bool) -> void:
+	var rt: RoomTurn = _rooms[room_id]
+	var turn_id := rt.current_turn_id
+	var player_id := rt.current_player_id
+	rt.stt_gen += 1
+	var gen := rt.stt_gen
+	rt.stt_last_size = rt.audio_buffer.size()
+	if not is_final:
+		rt.stt_busy = true
+	var stt: Dictionary = await _ai.transcribe(rt.audio_buffer, rt.audio_rate)
+	if not is_final:
+		rt.stt_busy = false
+	# Ответ мог опоздать: ход закончился, комнату закрыли или запущено более свежее распознавание.
+	if not _rooms.has(room_id) or rt.current_turn_id != turn_id or rt.state != State.PLAYER_TURN:
+		return
+	if gen != rt.stt_gen or not NetworkManager.room_peer_ids(room_id).has(player_id):
+		return
+	if not stt.ok and not is_final:
+		return # промежуточный сбой не шумим: ошибка уже в логе, следующий тик попробует снова
+	_dictation_result.rpc_id(player_id, stt.text, is_final, stt.ok)
+
+@rpc("authority", "reliable")
+func _dictation_result(text: String, is_final: bool, ok: bool) -> void:
+	dictation_result.emit(text, is_final, ok)
 
 func _on_turn_timeout(room_id: String) -> void:
 	if not _rooms.has(room_id):
 		return
+	# Игрок ничего не отправил (клиент к этому моменту уже отправил бы то, что
+	# было в поле) — ход уходит с пустой репликой.
 	if _rooms[room_id].state == State.PLAYER_TURN:
-		_end_player_turn(room_id)
+		_end_player_turn(room_id, "")
 
-func _end_player_turn(room_id: String) -> void:
+func _end_player_turn(room_id: String, text: String) -> void:
 	var rt: RoomTurn = _rooms[room_id]
 	rt.timer.stop()
+	rt.live_timer.stop()
+	rt.dictating = false
+	rt.submitted_text = text
 	rt.state = State.PROCESSING
 	for pid in NetworkManager.room_peer_ids(room_id):
 		_on_processing_started.rpc_id(pid)
@@ -174,121 +302,82 @@ func _end_player_turn(room_id: String) -> void:
 @rpc("authority", "reliable")
 func _on_processing_started() -> void:
 	state = State.PROCESSING
+	mic_open = false
 	processing_started.emit()
 
 # ---------------------------------------------------------------------------
-# Запрос к AI-бэкенду
+# Обработка хода через внешние API (STT -> LLM -> TTS, см. AiBackend.gd)
 # ---------------------------------------------------------------------------
+
+# Корутина: вызывается без await из _end_player_turn. Между await'ами
+# комнату могут закрыть, поэтому после каждого шага проверяем, что ход всё
+# ещё ждёт ответа именно этой комнаты.
 func _send_turn_to_backend(room_id: String) -> void:
 	var rt: RoomTurn = _rooms[room_id]
-	var wav_bytes := _encode_wav_16bit_mono(rt.audio_buffer, AudioServer.get_mix_rate())
-	var events_json := JSON.stringify(rt.turn_events)
+	var turn_id := rt.current_turn_id
+	var transcript := rt.submitted_text
+	var events := rt.turn_events.duplicate()
 
-	var boundary := "----turnmanager-%d" % Time.get_ticks_msec()
-	var body := PackedByteArray()
-	_append_form_field(body, boundary, "turn_id", str(rt.current_turn_id))
-	_append_form_field(body, boundary, "scenario", rt.scenario)
-	_append_form_field(body, boundary, "events", events_json)
-	_append_form_file(body, boundary, "audio", "turn.wav", "audio/wav", wav_bytes)
-	body.append_array(("--%s--\r\n" % boundary).to_utf8_buffer())
+	var npc: Dictionary = await _ai.npc_reply(rt.scenario, rt.history, transcript, events)
+	if not _is_turn_processing(room_id, turn_id):
+		return
+	if npc.is_empty():
+		_fail_turn(room_id, "собеседник не ответил")
+		return
 
-	var headers := PackedStringArray([
-		"Content-Type: multipart/form-data; boundary=%s" % boundary,
-	])
+	var reply_text: String = npc.reply_text
+	var score_delta: int = npc.score_delta
+	var emotion := "good" if score_delta > 0 else "neutral"
+	var voice: Dictionary = await _ai.synthesize(reply_text, emotion)
+	if not _is_turn_processing(room_id, turn_id):
+		return
+	if voice.is_empty():
+		_fail_turn(room_id, "не удалось озвучить ответ")
+		return
 
-	var err := rt.http.request_raw(BACKEND_URL, headers, HTTPClient.METHOD_POST, body)
-	if err != OK:
-		push_warning("Не удалось отправить ход бэкенду (%s), включаю fallback" % err)
-		_fallback_npc_turn(room_id)
+	AiBackend.remember(rt.history, npc)
+	_apply_npc_turn(room_id, transcript, reply_text, PackedStringArray(npc.actions), score_delta, voice.mp3, voice.duration)
 
-func _append_form_field(body: PackedByteArray, boundary: String, field_name: String, value: String) -> void:
-	var chunk := "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n" % [boundary, field_name, value]
-	body.append_array(chunk.to_utf8_buffer())
-
-func _append_form_file(body: PackedByteArray, boundary: String, field_name: String, filename: String, content_type: String, data: PackedByteArray) -> void:
-	var header := "--%s\r\nContent-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\nContent-Type: %s\r\n\r\n" % [boundary, field_name, filename, content_type]
-	body.append_array(header.to_utf8_buffer())
-	body.append_array(data)
-	body.append_array("\r\n".to_utf8_buffer())
-
-func _on_backend_response(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray, room_id: String) -> void:
+func _is_turn_processing(room_id: String, turn_id: int) -> bool:
 	if not _rooms.has(room_id):
-		return
+		return false
 	var rt: RoomTurn = _rooms[room_id]
-	if rt.state != State.PROCESSING:
-		return
-	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
-		push_warning("Бэкенд недоступен (result=%s, code=%s), включаю fallback" % [result, response_code])
-		_fallback_npc_turn(room_id)
-		return
+	return rt.state == State.PROCESSING and rt.current_turn_id == turn_id
 
-	var parsed = JSON.parse_string(body.get_string_from_utf8())
-	if parsed == null or not (parsed is Dictionary):
-		push_warning("Не удалось разобрать ответ бэкенда, включаю fallback")
-		_fallback_npc_turn(room_id)
-		return
-
-	var raw_actions = parsed.get("actions", [])
-	var actions_array := PackedStringArray()
-	if raw_actions is Array:
-		for a in raw_actions:
-			actions_array.append(str(a))
-	_apply_npc_turn(
-		room_id,
-		parsed.get("transcript", ""),
-		parsed.get("reply_text", ""),
-		actions_array,
-		parsed.get("score_delta", 0),
-		parsed.get("audio_base64", ""),
-		float(parsed.get("time", 0.0))
-	)
-
-func _fallback_npc_turn(room_id: String) -> void:
-	var reply: String = _FALLBACK_REPLIES[randi() % _FALLBACK_REPLIES.size()]
-	_apply_npc_turn(room_id, "", reply, PackedStringArray(["idle"]), 0, "", 0.0)
-
-func _apply_npc_turn(room_id: String, transcript: String, reply_text: String, actions: PackedStringArray, score_delta: int, audio_base64: String, explicit_duration_sec: float = 0.0) -> void:
+# Ход не удался: ни подмен, ни заглушек — клиенты получают причину, а
+# через FAIL_PAUSE_SEC (тем же таймером, что и пауза после реплики NPC)
+# игрок начинает ход заново. История и счёт остаются как были.
+func _fail_turn(room_id: String, reason: String) -> void:
 	var rt: RoomTurn = _rooms[room_id]
-	print("[Ход %d] Игрок сказал: %s" % [rt.current_turn_id, transcript if transcript != "" else "(речь не распознана)"])
+	push_error("[Ход %d] Ход провален: %s" % [rt.current_turn_id, reason])
+	rt.state = State.NPC_TURN # пока висит ошибка, ввод игрока не принимается
+	for pid in NetworkManager.room_peer_ids(room_id):
+		_on_turn_failed.rpc_id(pid, reason)
+	rt.npc_wait_timer.start(FAIL_PAUSE_SEC)
+
+@rpc("authority", "reliable")
+func _on_turn_failed(reason: String) -> void:
+	state = State.NPC_TURN
+	mic_open = false
+	turn_failed.emit(reason)
+
+func _apply_npc_turn(room_id: String, transcript: String, reply_text: String, actions: PackedStringArray, score_delta: int, mp3: PackedByteArray, duration_sec: float) -> void:
+	var rt: RoomTurn = _rooms[room_id]
+	print("[Ход %d] Игрок сказал: %s" % [rt.current_turn_id, transcript if transcript != "" else "(тишина)"])
 	if not rt.turn_events.is_empty():
 		print("[Ход %d] Действия игрока: %s" % [rt.current_turn_id, str(rt.turn_events)])
-	if audio_base64.is_empty():
-		# Бэкенд (или fallback-заглушка) не прислал озвучку — синтезируем сами
-		# на сервере, чтобы все клиенты в комнате услышали ОДНУ и ту же
-		# запись, а не каждый свой клиентский TTS вразнобой.
-		var wav_bytes := _synthesize_speech(reply_text)
-		if not wav_bytes.is_empty():
-			audio_base64 = Marshalls.raw_to_base64(wav_bytes)
 	rt.state = State.NPC_TURN
 	rt.total_score += score_delta
+	var audio_base64 := Marshalls.raw_to_base64(mp3)
 	for pid in NetworkManager.room_peer_ids(room_id):
 		_broadcast_npc_turn.rpc_id(pid, rt.current_turn_id, transcript, reply_text, actions, score_delta, rt.total_score, audio_base64)
 	# Следующий ход игрока стартует не сразу, а после того как реплика NPC
 	# "доиграет" — иначе таймер игрока тикал бы поверх ещё звучащего ответа.
-	var npc_duration := _estimate_npc_duration(explicit_duration_sec, audio_base64, reply_text)
-	rt.npc_wait_timer.start(npc_duration)
+	rt.npc_wait_timer.start(maxf(duration_sec, 1.0))
 
 func _on_npc_wait_timeout(room_id: String) -> void:
 	if _rooms.has(room_id):
 		_start_player_turn(room_id)
-
-# Сколько будет "говорить" NPC: явное значение от бэкенда > длительность
-# присланного/синтезированного аудио (по WAV-заголовку) > грубая оценка по
-# длине текста (для mp3 без декодера или полного отсутствия звука).
-func _estimate_npc_duration(explicit_duration_sec: float, audio_base64: String, reply_text: String) -> float:
-	if explicit_duration_sec > 0.0:
-		return explicit_duration_sec
-	if not audio_base64.is_empty():
-		var raw_bytes := Marshalls.base64_to_raw(audio_base64)
-		if raw_bytes.size() > 44 and raw_bytes.slice(0, 4).get_string_from_ascii() == "RIFF":
-			var channels := raw_bytes.decode_u16(22)
-			var sample_rate := raw_bytes.decode_u32(24)
-			var bits := raw_bytes.decode_u16(34)
-			var bytes_per_sample := bits / 8
-			if sample_rate > 0 and channels > 0 and bytes_per_sample > 0:
-				var data_len := raw_bytes.size() - 44
-				return maxf(float(data_len) / float(sample_rate * channels * bytes_per_sample), 1.0)
-	return maxf(reply_text.length() * 0.07, 1.0)
 
 @rpc("authority", "reliable")
 func _broadcast_npc_turn(turn_id: int, transcript: String, reply_text: String, actions: PackedStringArray, score_delta: int, new_total_score: int, audio_base64: String) -> void:
@@ -297,103 +386,25 @@ func _broadcast_npc_turn(turn_id: int, transcript: String, reply_text: String, a
 	state = State.NPC_TURN
 	total_score = new_total_score
 	npc_turn_received.emit(turn_id, transcript, reply_text, actions, score_delta, new_total_score, audio_base64)
-	if audio_base64.is_empty():
-		_speak_npc_text(reply_text)
-	else:
-		_play_npc_voice(audio_base64)
+	_play_npc_voice(audio_base64)
 
 var _npc_voice: AudioStreamPlayer
 
-# Клиентский TTS — последний рубеж на случай, если сервер тоже не смог
-# синтезировать озвучку (например, espeak-ng не установлен на сервере).
-# В обычном случае сервер уже прислал готовый audio_base64, и сюда не
-# заходим — см. _synthesize_speech() и _apply_npc_turn().
-func _speak_npc_text(text: String) -> void:
-	if text.is_empty():
-		return
-	DisplayServer.tts_speak(text, "", 100, 1.0, 1.0, 0, false)
-
+# Голос NPC приходит с сервера готовым mp3 (Яндекс TTS, alena) — все клиенты
+# комнаты слышат ровно одну и ту же запись.
 func _play_npc_voice(audio_base64: String) -> void:
-	if audio_base64.is_empty():
-		return
-	var raw_bytes := Marshalls.base64_to_raw(audio_base64)
-	if raw_bytes.is_empty():
-		push_warning("Не удалось декодировать audio_base64 ответа NPC")
+	var stream := AudioStreamMP3.new()
+	stream.data = Marshalls.base64_to_raw(audio_base64)
+	if stream.get_length() <= 0.0:
+		push_error("Ответ NPC пришёл без читаемого mp3-аудио")
 		return
 	if _npc_voice == null:
 		_npc_voice = AudioStreamPlayer.new()
 		_npc_voice.bus = "Master"
 		add_child(_npc_voice)
-	var stream := _bytes_to_audio_stream(raw_bytes)
-	if stream == null:
-		return
 	_npc_voice.stream = stream
 	_npc_voice.play()
-
-# Наш собственный синтез (см. _synthesize_speech) присылает WAV; реальный
-# AI-бэкенд по контракту — mp3. Определяем формат по сигнатуре байт, чтобы
-# поддержать оба варианта без отдельного поля в ответе.
-func _bytes_to_audio_stream(raw_bytes: PackedByteArray) -> AudioStream:
-	if raw_bytes.size() > 44 and raw_bytes.slice(0, 4).get_string_from_ascii() == "RIFF":
-		var channels := raw_bytes.decode_u16(22)
-		var sample_rate := raw_bytes.decode_u32(24)
-		var bits := raw_bytes.decode_u16(34)
-		var stream := AudioStreamWAV.new()
-		stream.format = AudioStreamWAV.FORMAT_16_BITS if bits == 16 else AudioStreamWAV.FORMAT_8_BITS
-		stream.mix_rate = sample_rate
-		stream.stereo = channels == 2
-		stream.data = raw_bytes.slice(44)
-		return stream
-	var mp3 := AudioStreamMP3.new()
-	mp3.data = raw_bytes
-	return mp3
-
-# Серверный TTS через espeak-ng (офлайн, без API-ключей). Возвращает пустой
-# массив, если утилита не установлена или упала — тогда _apply_npc_turn
-# оставит audio_base64 пустым и сработает клиентский _speak_npc_text().
-func _synthesize_speech(text: String) -> PackedByteArray:
-	if not multiplayer.is_server() or text.is_empty():
-		return PackedByteArray()
-	var tmp_path := "/tmp/turnmanager_tts_%d.wav" % Time.get_ticks_usec()
-	var args := PackedStringArray(["-v", "ru", "-w", tmp_path, text])
-	var exit_code := OS.execute("espeak-ng", args, [])
-	if exit_code != 0 or not FileAccess.file_exists(tmp_path):
-		push_warning("espeak-ng не смог синтезировать речь (код %s)" % exit_code)
-		return PackedByteArray()
-	var f := FileAccess.open(tmp_path, FileAccess.READ)
-	var bytes := f.get_buffer(f.get_length())
-	f.close()
-	DirAccess.remove_absolute(tmp_path)
-	return bytes
 
 func _broadcast_event(_room_id: String, _action: String) -> void:
 	pass # TODO: применить визуальный эффект события на сцену — ждём
 		 # утверждённый командой список интерактивных объектов ресторана
-
-func _encode_wav_16bit_mono(samples: PackedFloat32Array, sample_rate: int) -> PackedByteArray:
-	var data := PackedByteArray()
-	data.resize(samples.size() * 2)
-	for i in samples.size():
-		var s := clampf(samples[i], -1.0, 1.0)
-		data.encode_s16(i * 2, int(s * 32767.0))
-
-	var header := PackedByteArray()
-	header.resize(44)
-	var data_size := data.size()
-	var byte_rate := sample_rate * 2
-	header.encode_u32(0, 0x46464952)   # "RIFF"
-	header.encode_u32(4, 36 + data_size)
-	header.encode_u32(8, 0x45564157)   # "WAVE"
-	header.encode_u32(12, 0x20746d66)  # "fmt "
-	header.encode_u32(16, 16)
-	header.encode_u16(20, 1)           # PCM
-	header.encode_u16(22, 1)           # mono
-	header.encode_u32(24, sample_rate)
-	header.encode_u32(28, byte_rate)
-	header.encode_u16(32, 2)           # block align
-	header.encode_u16(34, 16)          # bits per sample
-	header.encode_u32(36, 0x61746164)  # "data"
-	header.encode_u32(40, data_size)
-
-	header.append_array(data)
-	return header
