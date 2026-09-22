@@ -19,9 +19,12 @@ extends Node
 # Ответ JSON: {transcript, reply_text, actions (массив строк из словаря
 #              "talk"/"turn"/"nod"/"shrug"/"idle", см. Npc.gd), score_delta,
 #              audio_base64 (mp3), time (сек, опционально)}
-# audio_base64 может быть пустым — тогда сервер сам озвучит reply_text
-# через espeak-ng (см. _synthesize_speech), а на выходе отдаст его же
-# клиентам как WAV. Клиент (_bytes_to_audio_stream) понимает и mp3, и WAV.
+# audio_base64 в норме уже озвучен бэкендом (Yandex SpeechKit, см.
+# backend/app.py). Пустым он приходит только если TTS на бэкенде не
+# получился (нет ключей/сеть упала) — тогда сервер синтезирует речь сам
+# через espeak-ng (см. _synthesize_speech), а если и это не выйдет —
+# клиент озвучит текст локально (_speak_npc_text). Клиент
+# (_bytes_to_audio_stream) понимает и mp3, и WAV.
 # time — сколько длится реплика NPC; на это время сервер задерживает старт
 # следующего хода игрока (_on_npc_wait_timeout), чтобы таймер игрока не тикал,
 # пока NPC ещё "говорит". Если бэкенд его не прислал (или прислал 0/пусто),
