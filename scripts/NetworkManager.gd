@@ -1,7 +1,9 @@
 extends Node
 
 # Синглтон (автозагрузка). Отвечает за:
-# 1. Выделенный сервер: держит ENet-порт и раздаёт комнаты по коду (room_id).
+# 1. Выделенный сервер: держит WebSocket-порт и раздаёт комнаты по коду (room_id).
+#    Транспорт — WebSocket, а не ENet: ENet ходит по UDP, которого в браузере
+#    нет, а web-клиент должен подключаться к тому же серверу, что и десктоп.
 #    Один процесс обслуживает СРАЗУ несколько комнат — состояние каждой
 #    комнаты живёт в _rooms[room_id], а не в полях этого узла, поэтому
 #    комнаты не мешают друг другу.
@@ -18,11 +20,17 @@ extends Node
 # за пределы комнаты: public_visibility=false в Player.tscn + точечные
 # set_visibility_for() в _grant_room_visibility() ниже. Полностью убрать
 # и сам "призрачный" узел можно только настоящим разделением на per-room
-# MultiplayerAPI/ENet-пир — сознательно не делали, см. обсуждение в чате.
+# MultiplayerAPI/сетевой пир — сознательно не делали, см. обсуждение в чате.
 
 const LocalServer := preload("res://scripts/LocalServer.gd")
 
 const SERVER_PORT := 7777
+# Публичный сервер на VPS: nginx снимает TLS и проксирует на ws://127.0.0.1:7777.
+# Web-сборка ходит сюда по умолчанию — со страницы по HTTPS браузер пускает только wss://.
+const PUBLIC_SERVER_URL := "wss://77-42-43-16.sslip.io"
+# Сырой голос (см. VoiceChat.gd) — это ~200 КБ/с на говорящего, дефолтных
+# 64 КБ буфера WebSocket не хватает даже на полсекунды задержки сети.
+const WS_BUFFER_SIZE := 1 << 20
 const MAX_PLAYERS := 128
 const LOCAL_SERVER_STARTUP_SEC := 30.0 # сколько ждём, пока встроенный сервер загрузит проект
 const IDLE_EXIT_SEC := 10.0            # сервер с --exit-when-idle гаснет, если после ухода последнего клиента никто не вернулся
@@ -34,9 +42,10 @@ signal room_ready(room_id: String)
 signal room_join_failed(reason: String)
 
 # По умолчанию игра поднимает свой сервер сама (см. LocalServer.gd) и ходит
-# на него. Флаг --server=IP отправляет клиента на чужой сервер и отключает
-# встроенный.
-var server_address := "127.0.0.1"
+# на него; в браузере встроенного сервера нет — там сразу PUBLIC_SERVER_URL.
+# Флаг --server=URL (или просто --server=IP) отправляет клиента на чужой
+# сервер и отключает встроенный.
+var server_url := "ws://127.0.0.1:%d" % SERVER_PORT
 
 var players_info: Dictionary = {}   # peer_id -> {name, role} — ростер СВОЕЙ комнаты (актуально на клиенте)
 var player_nodes: Dictionary = {}   # peer_id -> Node (инстанс Player.tscn), общий для всех комнат в этом процессе
@@ -63,6 +72,7 @@ var _peer_room: Dictionary = {}  # peer_id -> room_id
 
 func _ready() -> void:
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
+	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.connected_to_server.connect(_on_connected_ok)
 	multiplayer.connection_failed.connect(_on_connected_fail)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
@@ -71,7 +81,7 @@ func _ready() -> void:
 	var explicit_server := false
 	for arg in args:
 		if arg.begins_with("--server="):
-			server_address = arg.substr("--server=".length())
+			server_url = _normalize_server_url(arg.substr("--server=".length()))
 			explicit_server = true
 		elif arg.begins_with("--bind="):
 			_bind_ip = arg.substr("--bind=".length())
@@ -79,13 +89,27 @@ func _ready() -> void:
 
 	if args.has("--dedicated-server"):
 		_start_dedicated_server()
+	elif OS.has_feature("web") and not explicit_server:
+		server_url = PUBLIC_SERVER_URL
 	elif not explicit_server:
 		_start_local_server()
 
+# "1.2.3.4" -> "ws://1.2.3.4:7777"; полный ws:// или wss:// URL — как есть.
+static func _normalize_server_url(value: String) -> String:
+	if value.begins_with("ws://") or value.begins_with("wss://"):
+		return value
+	return "ws://%s:%d" % [value, SERVER_PORT]
+
+static func _new_peer() -> WebSocketMultiplayerPeer:
+	var peer := WebSocketMultiplayerPeer.new()
+	peer.inbound_buffer_size = WS_BUFFER_SIZE
+	peer.outbound_buffer_size = WS_BUFFER_SIZE
+	return peer
+
 # Обычный запуск игры: поднимаем сервер сами, дочерним процессом.
 func _start_local_server() -> void:
-	if OS.has_feature("web") or OS.has_feature("mobile"):
-		push_error("На этой платформе встроенный сервер недоступен: укажи внешний флагом --server=IP")
+	if OS.has_feature("mobile"):
+		push_error("На этой платформе встроенный сервер недоступен: укажи внешний флагом --server=URL")
 		return
 	_local_server = LocalServer.new()
 	add_child(_local_server)
@@ -93,10 +117,8 @@ func _start_local_server() -> void:
 		_local_server_deadline_msec = Time.get_ticks_msec() + int(LOCAL_SERVER_STARTUP_SEC * 1000.0)
 
 func _start_dedicated_server() -> void:
-	var peer := ENetMultiplayerPeer.new()
-	if not _bind_ip.is_empty():
-		peer.set_bind_ip(_bind_ip)
-	var err := peer.create_server(SERVER_PORT, MAX_PLAYERS)
+	var peer := _new_peer()
+	var err := peer.create_server(SERVER_PORT, _bind_ip if not _bind_ip.is_empty() else "*")
 	if err != OK:
 		# Чаще всего порт уже занят другим сервером — тогда игра просто
 		# подключится к нему, а этот процесс без сервера смысла не имеет.
@@ -131,10 +153,11 @@ func join_room(room_id: String, player_name: String) -> void:
 	_connect_to_server()
 
 func _connect_to_server() -> void:
-	var peer := ENetMultiplayerPeer.new()
-	var err := peer.create_client(server_address, SERVER_PORT)
+	var peer := _new_peer()
+	var err := peer.create_client(server_url)
 	if err != OK:
-		push_error("Не удалось подключиться к серверу: %s" % err)
+		push_error("Не удалось подключиться к серверу %s: %s" % [server_url, err])
+		room_join_failed.emit("не удалось подключиться к серверу")
 		return
 	multiplayer.multiplayer_peer = peer
 
@@ -262,6 +285,11 @@ func _spawn_via_spawner(id: int) -> void:
 	var spawner: MultiplayerSpawner = players_root.get_node("PlayerSpawner")
 	spawner.spawn({"id": id})
 
+# У WebSocket-сервера, в отличие от ENet, нет лимита пиров — держим его сами.
+func _on_peer_connected(id: int) -> void:
+	if multiplayer.is_server() and multiplayer.get_peers().size() > MAX_PLAYERS:
+		(multiplayer.multiplayer_peer as WebSocketMultiplayerPeer).disconnect_peer(id)
+
 func _on_peer_disconnected(id: int) -> void:
 	if multiplayer.is_server():
 		_server_on_peer_disconnected(id)
@@ -288,7 +316,8 @@ func _server_on_peer_disconnected(id: int) -> void:
 		for pid in room.players_info.keys():
 			rpc_id(pid, "_room_state", room_id, room.players_info)
 
-# ---------- Голос (тестовый релей поверх ENet, в пределах одной комнаты) ----------
+# ---------- Голос (тестовый релей через сервер, в пределах одной комнаты) ----------
+# По WebSocket "unreliable_ordered" на деле доставляется надёжно (это TCP).
 
 @rpc("any_peer", "unreliable_ordered")
 func relay_audio(samples: PackedFloat32Array) -> void:
