@@ -30,6 +30,7 @@ func _set_busy(text: String) -> void:
 
 func _on_room_ready(room_id: String) -> void:
 	print("Комната: %s" % room_id)
+	MusicPlayer.play_room_music()
 	hide()
 
 func _on_room_join_failed(reason: String) -> void:

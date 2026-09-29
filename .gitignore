@@ -4,3 +4,4 @@ exports
 secrets.cfg
 backend/venv
 backend/__pycache__
+.idea
